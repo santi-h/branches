@@ -1,0 +1,109 @@
+import os
+import git
+import re
+
+class GitUtils:
+  def __init__(self, repo_path = os.getcwd()):
+    while True:
+      try:
+        self._repo = git.Repo(repo_path)
+        break
+      except git.exc.InvalidGitRepositoryError as e:
+        if len(repo_path) > 1:
+          repo_path = os.path.dirname(repo_path)
+        else:
+          raise e
+
+    self._repo_path = repo_path
+    self._cmd = git.cmd.Git(repo_path)
+    self._git = self._repo.git
+
+  def owner_and_repo(self):
+    owner = repo = None
+
+    remotes = self._cmd.execute(['git', 'remote', '-v'])
+    match = re.search(r'github\.com(?::|\/)([\w\-]+)\/([\w\-]+)\.git \(fetch\)', remotes)
+    if match is not None:
+      owner = match.group(1)
+      repo = match.group(2)
+
+    return owner, repo
+
+  def current_branch(self):
+    if self._repo.head.is_detached:
+      return None
+    return str(self._repo.active_branch)
+
+  def branches(self):
+    branches = self._cmd.execute(['git', 'branch']).split('\n')
+    return [branch.replace('*', '').strip() for branch in branches if branch]
+
+  def local_sha(self, branch):
+    return str(self.local_commit_from_branch(branch))
+
+  def local_commit_from_branch(self, branch):
+    return self._repo.branches[branch].commit
+
+  def local_commit_from_sha(self, sha):
+    ret = None
+
+    try:
+     ret = self._repo.commit(sha)
+    except ValueError as exception:
+      # Sha doesn't exist locally. Ignore and return None
+      pass
+
+    return ret
+
+  def fetch_sigle_sha(self, sha):
+    self._repo.remotes.origin.fetch(sha)
+    return self.local_commit_from_sha(sha)
+
+  def remote_shas(self, branches):
+    ret = {}
+
+    try:
+      ls_remote_output = self._cmd.execute(['git', 'ls-remote', 'origin', *branches])
+    except git.exc.GitCommandError as exception:
+      # origin doesn't exist
+      return {}
+
+    for line in ls_remote_output.split('\n'):
+      result = re.search(r'^(\w+)\s+refs\/heads\/(.*)$', line)
+      if result is not None:
+        ret[result.group(2)] = result.group(1)
+
+    return ret
+
+  def distance(self, branch_from, branch_to):
+    result = self._cmd.execute(['git', 'rev-list', '--left-right', '--count', f'{branch_from}...{branch_to}'])
+    return re.split(r'\s+', result.strip())
+
+  def main_branch(self):
+    try:
+      origin_ref = self._repo.refs['origin/HEAD']
+    except IndexError as exception:
+      for branch in ['main', 'release', 'master']:
+        if branch in self._repo.branches:
+          return branch
+
+      raise exception
+
+    origin_head = origin_ref.reference.name
+    return re.search(r'\/([^\/]+?)\s*$', origin_head).group(1)
+
+  def shas_ahead_of(self, branch_from, branch_to):
+    result = self._cmd.execute(['git', 'log', f'{branch_from}..{branch_to}', '--format=%H', '--reverse'])
+    return re.split(r'\s+', result.strip())
+
+  def current_user_email(self):
+    return self._cmd.execute(['git', 'config', 'user.email']).strip()
+
+  def commit_author_email(self, sha):
+    return self._cmd.execute(['git', 'show', '--format=%ae', '--no-patch', sha]).strip()
+
+  def date_authored(self, sha):
+    return self.local_commit_from_sha(sha).authored_datetime
+
+  def date_committed(self, sha):
+    return self.local_commit_from_sha(sha).committed_datetime

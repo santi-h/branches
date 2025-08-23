@@ -1,0 +1,5 @@
+#!/usr/bin/env zsh
+
+ME=`basename "$0"`
+ME_LOCATION=`dirname "$0"`
+PYTHONPATH="$ME_LOCATION/../src" $PYENV_ROOT/versions/scripts-lib/bin/python -m branches "$@"
