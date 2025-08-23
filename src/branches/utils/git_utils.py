@@ -17,22 +17,32 @@ class GitUtils:
     self._repo_path = repo_path
     self._cmd = git.cmd.Git(repo_path)
     self._git = self._repo.git
+    self._current_branch = None
+    self._owner_name = None
+    self._repo_name = None
 
   def owner_and_repo(self):
-    owner = repo = None
+    if self._owner_name and self._repo_name:
+      return self._owner_name, self._repo_name
 
     remotes = self._cmd.execute(['git', 'remote', '-v'])
     match = re.search(r'github\.com(?::|\/)([\w\-]+)\/([\w\-]+)\.git \(fetch\)', remotes)
     if match is not None:
-      owner = match.group(1)
-      repo = match.group(2)
+      self._owner_name = match.group(1)
+      self._repo_name = match.group(2)
 
-    return owner, repo
+    return self._owner_name, self._repo_name
 
   def current_branch(self):
+    if self._current_branch:
+      return self._current_branch
+
     if self._repo.head.is_detached:
       return None
-    return str(self._repo.active_branch)
+
+    self._current_branch = str(self._repo.active_branch)
+
+    return self._current_branch
 
   def branches(self):
     branches = self._cmd.execute(['git', 'branch']).split('\n')
@@ -75,9 +85,17 @@ class GitUtils:
 
     return ret
 
-  def distance(self, branch_from, branch_to):
+  def distance(self, branch_from, branch_to) -> list[int]:
     result = self._cmd.execute(['git', 'rev-list', '--left-right', '--count', f'{branch_from}...{branch_to}'])
-    return re.split(r'\s+', result.strip())
+    return [int(distance_str) for distance_str in re.split(r'\s+', result.strip())]
+
+  def parent_shas_of_ref(self, ref: str, n: int = 1) -> list[list[str]]:
+    ret = []
+
+    for line in self._cmd.execute(['git', 'rev-list', '--parents', f'-n{n}', ref]).split('\n'):
+      ret.append(re.split(r'\s+', line.strip()))
+
+    return ret
 
   def main_branch(self):
     try:
