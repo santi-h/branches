@@ -69,7 +69,7 @@ class GitUtils:
     self._repo.remotes.origin.fetch(sha)
     return self.local_commit_from_sha(sha)
 
-  def remote_shas(self, branches):
+  def remote_shas(self, branches) -> dict[str, str]:
     ret = {}
 
     try:
@@ -85,11 +85,18 @@ class GitUtils:
 
     return ret
 
-  def distance(self, branch_from, branch_to) -> list[int]:
+  def distance(self, branch_from, branch_to) -> tuple[int, int]:
     result = self._cmd.execute(['git', 'rev-list', '--left-right', '--count', f'{branch_from}...{branch_to}'])
-    return [int(distance_str) for distance_str in re.split(r'\s+', result.strip())]
+    result = re.split(r'\s+', result.strip())
+    return (int(result[0]), int(result[1]))
 
   def parent_shas_of_ref(self, ref: str, n: int = 1) -> list[list[str]]:
+    """Returns the parent shas of `ref`, going at most `n` levels deep
+
+    Returns a list. Each element in the list is a level. Each level is a list of strings where each
+    string is a sha. The first element in a level is always the sha itself, and the rest of the
+    elements are the parents of that sha.
+    """
     ret = []
 
     command = ['git', 'rev-list', '--parents', f'-n{n}', ref, '--']
@@ -111,11 +118,11 @@ class GitUtils:
     origin_head = origin_ref.reference.name
     return re.search(r'\/([^\/]+?)\s*$', origin_head).group(1)
 
-  def shas_ahead_of(self, branch_from, branch_to):
+  def shas_ahead_of(self, branch_from, branch_to) -> list[str]:
     result = self._cmd.execute(['git', 'log', f'{branch_from}..{branch_to}', '--format=%H', '--reverse'])
-    return re.split(r'\s+', result.strip())
+    return [sha for sha in re.split(r'\s+', result.strip()) if sha.strip()]
 
-  def current_user_email(self):
+  def current_user_email(self) -> str:
     return self._cmd.execute(['git', 'config', 'user.email']).strip()
 
   def commit_author_email(self, sha):

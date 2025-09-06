@@ -1,5 +1,6 @@
 import unittest
 from src.branches.cli import (
+  local_branches_order,
   branches_ahead_shas_to_refs,
   rebase_order,
   base_branches_from_branches_ahead_refs,
@@ -7,6 +8,110 @@ from src.branches.cli import (
 )
 
 class TestBranches(unittest.TestCase):
+  def test_local_branches_order(self):
+    test_cases = [
+      [
+        {
+          'all_branches': ['main', 'feature'],
+          'main_branch': 'main',
+          'current_branch': 'feature',
+          'base_branches': {},
+          'short': True,
+        },
+        ['main', 'feature']
+      ],
+      [
+        {
+          'all_branches': ['main', 'feature-a', 'feature-b'],
+          'main_branch': 'main',
+          'current_branch': 'feature-b',
+          'base_branches': {},
+          'short': True,
+        },
+        ['main', 'feature-b']
+      ],
+      [
+        {
+          'all_branches': ['main', 'feature-a', 'feature-b'],
+          'main_branch': 'main',
+          'current_branch': 'feature-b',
+          'base_branches': {'feature-b': 'feature-a~2'},
+          'short': True,
+        },
+        ['main', 'feature-b', 'feature-a']
+      ],
+      [
+        {
+          'all_branches': ['main', 'feature-a', 'feature-b'],
+          'main_branch': 'main',
+          'current_branch': 'feature-b',
+          'base_branches': {'feature-a': 'feature-b~2'},
+          'short': True,
+        },
+        ['main', 'feature-b', 'feature-a']
+      ],
+      [
+        {
+          'all_branches': ['main', 'feature-a', 'feature-b', 'feature-c', 'feature-d', 'feature-e'],
+          'main_branch': 'main',
+          'current_branch': 'feature-b',
+          'base_branches': {
+            'feature-b': 'feature-a~2',
+            'feature-c': 'feature-b~1',
+            'feature-d': 'feature-c~54',
+            'feature-e': 'feature-a~1'
+          },
+          'short': True,
+        },
+        ['main', 'feature-b', 'feature-a', 'feature-c', 'feature-d', 'feature-e']
+      ],
+      [
+        {
+          'all_branches': ['main', 'feature-a', 'feature-b', 'feature-c', 'feature-d', 'feature-e'],
+          'main_branch': 'main',
+          'current_branch': 'feature-b',
+          'base_branches': {
+            'feature-c': 'feature-b~1',
+            'feature-d': 'feature-c~54',
+            'feature-e': 'feature-a~1'
+          },
+          'short': True,
+        },
+        ['main', 'feature-b', 'feature-c', 'feature-d']
+      ],
+      [
+        {
+          'all_branches': ['main', 'feature-a', 'feature-b', 'feature-c', 'feature-d', 'feature-e'],
+          'main_branch': 'main',
+          'current_branch': 'feature-c',
+          'base_branches': {
+            'feature-c': 'feature-b~1',
+            'feature-d': 'feature-c~54',
+            'feature-e': 'feature-a~1'
+          },
+          'short': True,
+        },
+        ['main', 'feature-c', 'feature-b', 'feature-d']
+      ],
+      [
+        {
+          'all_branches': ['main', 'feature-a', 'feature-b', 'feature-c', 'feature-d', 'feature-e'],
+          'main_branch': 'main',
+          'current_branch': 'main',
+          'base_branches': {
+            'feature-c': 'feature-b~1',
+            'feature-d': 'feature-c~54',
+            'feature-e': 'feature-a~1'
+          },
+          'short': True,
+        },
+        ['main']
+      ],
+    ]
+
+    for test_case in test_cases:
+      self.assertEqual(local_branches_order(**test_case[0]), test_case[1])
+
   def test_branches_ahead_shas_to_refs(self):
     self.assertEqual(branches_ahead_shas_to_refs({
       'b2': ['38089'],

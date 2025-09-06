@@ -1,24 +1,50 @@
 # Branches
 
-Provides information about local branches of the current git repo, such as:
+![screenshot](/docs/branches_screenshot.png)
+
+Outputs two things:
+
+1. **Branches info**: Alternative to `git branch`. Provides useful information about local branches.
+2. **Branches update** operations: Outputs a list of `git` commands that the user can choose to run to get their branches up to date.
+
+## Branches info
+
+For each branch, `branches` outputs information that is usaully handy to have:
 
 - Whether this branch is in `origin` or not
-- If the branch is in `origin`, the sync status. I.e. are `orgin` and local in sync or something needs to be pulled or pushed?
+- If the branch is in `origin`, is it in sync or something needs to be pulled or pushed?
 - If the branch is in `origin`, a handy link to the changes in github
+- Whether there's commits authored by someone else other than the current git user
 - Branch's last commit authored age in days
 - Commits ahead/behind with respect to the main branch. Main branch = branch referenced by `git symbolic-ref refs/remotes/origin/HEAD`
-- Base branch, in case the current branch branched of another one (except the main branch).
-- Whether there is a Pull Request with this branch as the head
+- Base branch, in case the current branch branched off another one
+- Whether this branch has a pull request
 - If there is a pull request, the status of it
 - If there is a pull request, a link to it
 
-At the end, the script outputs a command that the user can decide to run in order to:
+## Branches update operations
 
-- get all their branches up to date.
-- clean up merged branches that are already on the main branch and no longer needed.
-- safely pull updates that exist in `origin` but not locally
+The script does not run any write `git` command. It only outputs suggested `git` operations. The user can decide to run the suggested operations. The goal of these commands is to keep branches up to date. More specifically:
 
-The script itself will never push anything or run any `git` commands that change local refs. All suggestions are meant to be as safe as possible. For example, in order for it to suggest a branch to be deleted, all these conditions need to be satisfied:
+- Clean up merged branches that are already on the main branch.
+- Get all branches up to date (via `rebase`), respecting the tree structure.
+    ```plain
+                     branches
+                     operations
+                         ↓
+
+                  N      >            N     <- branch3
+                 /                   /
+            K---L---M    >      K---L---M   <- branch2
+           /                   /
+          I---J          >    I---J         <- branch1
+         /                   /
+    A---B---C---E---F---G---H               <- main
+    ```
+- Push the branches that are currently in sync with `origin` and the current user is the only author.
+- Safely pull updates that exist in `origin` but not locally
+
+All suggestions are meant to be as safe as possible. For example, in order for it to suggest a branch to be deleted, all these conditions need to be satisfied:
 
 - It is not the main branch
 - A PR existed and was merged
@@ -29,17 +55,13 @@ The command that it outputs is a suggestion and the user makes the call whether 
 
 The update commands follow a no-merge approach. All update suggestions are `rebase` operations. If a branch contains merge commits, no rebase operation will ever be suggested for that branch.
 
-![screenshot](/docs/branches_screenshot.png)
-
 ## Assumptions and requirements
-
-These also represent potential TODOs
 
 - This script was built on MacOS arm64 and was not tested in any other OS/Chip.
 - `git` is installed in the system.
 - The main remote is called `origin`. If there is no `origin` set the script will work but some features won't be available.
-- `origin` points to GitHub using a SSH shorthand URL. For example `"git@github.com:santi-h/branches.git"` (I.e. no HTTPS for now)
-- The envar `GITHUB_TOKEN` is set. This is needed for github to figure out whether there is a Pull Request for each branch. The token can be created in https://github.com/settings/tokens and needs the `repo` scope.
+- `origin` points to GitHub using a SSH shorthand URL. For example `"git@github.com:santi-h/branches.git"` (I.e. no HTTPS)
+- The envar `GITHUB_TOKEN` is set. This is needed for github to figure out whether there is a Pull Request for each branch. The token can be created at https://github.com/settings/tokens and needs the `repo` scope.
 
 ## Installation
 
