@@ -92,7 +92,8 @@ class GitUtils:
   def parent_shas_of_ref(self, ref: str, n: int = 1) -> list[list[str]]:
     ret = []
 
-    for line in self._cmd.execute(['git', 'rev-list', '--parents', f'-n{n}', ref]).split('\n'):
+    command = ['git', 'rev-list', '--parents', f'-n{n}', ref, '--']
+    for line in self._cmd.execute(command).split('\n'):
       ret.append(re.split(r'\s+', line.strip()))
 
     return ret
