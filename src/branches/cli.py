@@ -87,7 +87,7 @@ def main() -> int:
   parser.add_argument('-s', '--short', action='store_true', default=False,
                       help='Show a short list only')
   parser.add_argument('--no-push', action='store_true', default=False,
-                      help='Do not add push commands')
+                      help='Do not suggest push commands')
   return branches(parser.parse_args())
 
 def branches(args: argparse.Namespace) -> int:
@@ -129,17 +129,17 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
     'branches_behind': [],
     'branches_ahead_shas': {},
     'branches_with_merge_commits': [],
-    'branches_safe_to_push': []
+    'branches_safe_to_push': [],
   }
 
   git_utils = GitUtils()
   main_branch = git_utils.main_branch()
+  all_branches = git_utils.branches()
 
-  ret['branches'] = local_branches_order(git_utils, args.short)
   ret['main_branch'] = main_branch
 
   branch_distances = {}
-  for branch in ret['branches']:
+  for branch in all_branches:
     branch_distances[branch] = git_utils.distance(branch, main_branch)
 
     if branch == main_branch or branch_distances[branch][0] <= 0:
@@ -157,20 +157,41 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
   base_branches = base_branches_from_branches_ahead_refs(
     branches_ahead_shas_to_refs(ret['branches_ahead_shas']))
 
+  ret['branches'] = local_branches_order(
+    all_branches,
+    main_branch,
+    git_utils.current_branch(),
+    base_branches,
+    args.short
+  )
+
   remote_shas = git_utils.remote_shas(ret['branches'])
+  show_warnings = True
   for branch in ret['branches']:
     base_branch = base_branches.get(branch, None)
-    row_dict = table_row(branch, git_utils, remote_shas, base_branch, branch_distances, ret)
+    row_dict = table_row(
+      branch,
+      git_utils,
+      remote_shas,
+      base_branch,
+      branch_distances,
+      ret,
+      show_warnings
+    )
+    show_warnings = False
     table.add_row(*[row_dict.get(column_key) for column_key in COLUMNS.keys()])
 
   return ret
 
-def table_row(branch: StrBranchName,
-              git_utils: GitUtils,
-              remote_shas: dict[StrBranchName, StrSha],
-              base_branch: StrBranchName | None,
-              branch_distances: dict[StrBranchName, list[int]],
-              ret: DictUpdateParams) -> DictTableRow:
+def table_row(
+  branch: StrBranchName,
+  git_utils: GitUtils,
+  remote_shas: dict[StrBranchName, StrSha],
+  base_branch: StrBranchName | None,
+  branch_distances: dict[StrBranchName, list[int]],
+  ret: DictUpdateParams,
+  show_warnings: bool,
+) -> DictTableRow:
   """Populates `ret` and returns a dictionary with `COLUMNS` values to add to the table
 
   The main two purposes of this function are:
@@ -191,34 +212,44 @@ def table_row(branch: StrBranchName,
   """
   row_dict = {} # See `COLUMNS` for valid keys.
 
-  sync_status = 'not_pushed'
+  sync_status = 'not_pushed' # means this branch is not in origin
+              # 'synced'       means this branch is in origin and is the same as local
+              # 'unsynced'     means this branch is in origin but is not the same as local
 
   local_commit = git_utils.local_commit_from_branch(branch)
   local_sha = str(local_commit)
   local_sha_short = local_sha[:5]
-  local_author_email = git_utils.commit_author_email(local_sha)
+  local_author_emails: set[str] = set()
 
   remote_commit = None
   remote_sha = remote_shas.get(branch)
-  remote_sha_short = '     '
-  remote_author_email = None
+  remote_sha_short = ''
+  remote_author_emails: set[str] = set()
+
+  for sha in git_utils.shas_ahead_of(ret['main_branch'], branch):
+    local_author_emails.add(git_utils.commit_author_email(sha))
 
   if remote_sha is not None:
     remote_sha_short = remote_sha[:5]
     if remote_sha == local_sha:
       sync_status = 'synced'
     else:
+      sync_status = 'unsynced'
       remote_commit = git_utils.local_commit_from_sha(remote_sha)
       if remote_commit is None:
         remote_commit = git_utils.fetch_sigle_sha(remote_sha)
 
-      sync_status = 'unsynced'
       if branch == ret['main_branch']:
         ret['unsynced_main'] = True
 
-    remote_author_email = git_utils.commit_author_email(remote_sha)
+  try:
+    pr = pull_request(branch)
+  except requests.exceptions.ConnectionError as exception:
+    pr = None
+    if show_warnings:
+      print('WARNING: there is internet connection issues.')
+      print('Network dependent functionality will not work.')
 
-  pr = pull_request(branch)
   if pr is not None and branch != ret['main_branch']:
     if pr.get('state') == 'open':
       pr_status = 'open'
@@ -246,7 +277,6 @@ def table_row(branch: StrBranchName,
       # - The branch was deleted in origin
       ret['branches_deletable'].append(branch)
 
-  different_author_flag = ' '
   if sync_status == 'synced':
     message_remote_sha = f'[{LOCAL_SHA_COLOR}]{remote_sha_short}[/{LOCAL_SHA_COLOR}]'
   elif sync_status == 'unsynced':
@@ -254,9 +284,6 @@ def table_row(branch: StrBranchName,
       message_remote_sha = f'[dim]{remote_sha_short}[/dim]'
     else:
       message_remote_sha = f'[bold]{remote_sha_short}[/bold]'
-
-    if git_utils.commit_author_email(remote_sha) != git_utils.current_user_email():
-      different_author_flag = '[yellow]![/yellow]'
   else:
     message_remote_sha = remote_sha_short
 
@@ -264,11 +291,30 @@ def table_row(branch: StrBranchName,
     owner, repo = git_utils.owner_and_repo()
     url = f'https://github.com/{owner}/{repo}/compare/{ret['main_branch']}...{branch}'
     message_remote_sha = f'[link={url}]{message_remote_sha}[/link]'
+    for sha in git_utils.shas_ahead_of(ret['main_branch'], remote_sha):
+      remote_author_emails.add(git_utils.commit_author_email(sha))
+
+  has_different_author = False
+
+  if any(email != git_utils.current_user_email() for email in remote_author_emails):
+    has_different_author = True
+    message_remote_sha = f'[red]![/red]{message_remote_sha}'
+  else:
+    message_remote_sha = f' {message_remote_sha}'
+
+  if any(email != git_utils.current_user_email() for email in local_author_emails):
+    has_different_author = True
+    message_local_sha = f'{local_sha_short}[red]![/red]'
+  else:
+    message_local_sha = f'{local_sha_short} '
+
+  if sync_status == 'synced' and not has_different_author:
+    ret['branches_safe_to_push'].append(branch)
 
   ahead, behind = branch_distances[branch]
   row_dict['base'] = base_branch
   row_dict['origin'] = message_remote_sha
-  row_dict['local'] = local_sha_short
+  row_dict['local'] = message_local_sha
   row_dict['age'] = str((datetime.now(timezone.utc) - git_utils.date_authored(local_sha)).days)
   row_dict['branch'] = branch
   row_dict['ahead'] = str(ahead)
@@ -285,33 +331,61 @@ def table_row(branch: StrBranchName,
   if behind > 0:
     ret['branches_behind'].append(branch)
 
-  if sync_status == 'synced' \
-    and git_utils.current_user_email() == git_utils.commit_author_email(local_sha):
-    ret['branches_safe_to_push'].append(branch)
-
   return row_dict
 
-def local_branches_order(git_utils: GitUtils, short: bool) -> list[StrBranchName]:
-  """Defines what branches are presented in the table.
+def branch_name_from_sha_ref(sha_ref: StrShaRef) -> StrBranchName:
+  """Returns the branch name sha_ref references"""
+  return re.search(r'^\s*(.*?)(?:~\d+)?\s*$', sha_ref).group(1)
+
+def local_branches_order(
+  all_branches: list[StrBranchName],
+  main_branch: StrBranchName,
+  current_branch: StrBranchName,
+  base_branches: dict[StrBranchName, StrShaRef],
+  short: bool
+) -> list[StrBranchName]:
+  """Defines what branches will be output in the table.
 
   Returns:
     An array of branch names. The first branch is guaranteed to be the main branch. The second
     branch is the current branch, unless the current branch is the main branch.
-    If there is no main branch, it returns an empty list [].
   """
-  main_branch = git_utils.main_branch()
-
-  if not main_branch:
-    return []
-
   if short:
+    dependent_branches: dict[StrBranchName, list[StrBranchName]] = {}
+    for dependent_branch, base_branch_ref in base_branches.items():
+      base_branch = branch_name_from_sha_ref(base_branch_ref)
+      dependent_branches[base_branch] = dependent_branches.get(base_branch, [])
+      dependent_branches[base_branch].append(dependent_branch)
+
+    queue: list[StrBranchName] = []
+    queue_saw: set[StrBranchName] = set()
     ret = [main_branch]
-    if git_utils.current_branch() not in ret:
-      ret.append(git_utils.current_branch())
+    if current_branch not in ret:
+      ret.append(current_branch)
+      queue.append(current_branch)
+      queue_saw.add(current_branch)
+
+    while len(queue) > 0:
+      branch = queue.pop()
+
+      if branch in base_branches:
+        branch_to_add = branch_name_from_sha_ref(base_branches[branch])
+        if branch_to_add not in queue_saw:
+          ret.append(branch_to_add)
+          queue.append(branch_to_add)
+          queue_saw.add(branch_to_add)
+
+      if branch in dependent_branches:
+        for branch_to_add in dependent_branches[branch]:
+          if branch_to_add not in queue_saw:
+            ret.append(branch_to_add)
+            queue.append(branch_to_add)
+            queue_saw.add(branch_to_add)
   else:
-    ret = git_utils.branches()
-    ret.remove(git_utils.current_branch())
-    ret.insert(0, git_utils.current_branch())
+    ret = copy.deepcopy(all_branches)
+
+    ret.remove(current_branch)
+    ret.insert(0, current_branch)
 
     if main_branch in ret:
       ret.remove(main_branch)
@@ -462,7 +536,7 @@ def rebase_order_for(branch: StrBranchName,
     list: Ordered list of branches for rebasing.
   """
   if branch in base_branches:
-    parent_branch = re.search(r'^\s*(.*?)(?:~\d+)?\s*$', base_branches[branch]).group(1)
+    parent_branch = branch_name_from_sha_ref(base_branches[branch])
     ret = rebase_order_for(parent_branch, base_branches)
     ret.append(branch)
     return ret
