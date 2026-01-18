@@ -79,7 +79,7 @@ branches
 ```shell
 rm -rf dist/ build/ && \
 pip freeze | xargs pip uninstall -y && \
-pip install -r requirements.txt && \
+pip install -r requirements_lock.txt && \
 pip install pyinstaller && \
 pyinstaller --onedir --name branches --paths src src/branches/__main__.py && \
 rm -rf build/
