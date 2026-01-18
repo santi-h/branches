@@ -2,4 +2,4 @@
 
 ME=`basename "$0"`
 ME_LOCATION=`dirname "$0"`
-PYTHONPATH="$ME_LOCATION/../src" $PYENV_ROOT/versions/scripts-lib/bin/python -m branches "$@"
+PYTHONPATH="$ME_LOCATION/../src" $PYENV_ROOT/versions/branches/bin/python -m branches "$@"
