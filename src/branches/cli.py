@@ -4,6 +4,8 @@ import argparse
 from .utils.git_utils import GitUtils
 import requests
 import os
+import subprocess
+import sys
 from urllib.parse import urlencode
 from rich.console import Console
 from rich import box
@@ -99,6 +101,8 @@ def branches(args: argparse.Namespace) -> int:
     int: Exit code (0 for success).
   """
   # `header_style=""`` removes the bold which makes assigning a yellow header not work.
+  ret = 0
+
   table = Table(box=box.SIMPLE_HEAD, header_style="")
   for _column_key, column_attr in COLUMNS.items():
     table.add_column(column_attr['column_name'], **(column_attr['column_props'] or {}))
@@ -110,8 +114,11 @@ def branches(args: argparse.Namespace) -> int:
   if len(update_commands) > 0:
     print('')
     print(' && \\\n'.join(update_commands))
+    print('')
+    if prompt('Run update command?'):
+      ret = subprocess.run(' && '.join(update_commands), shell=True).returncode
 
-  return 0
+  return ret
 
 def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
   """Prints out the state of all local branches in a table.
@@ -602,6 +609,24 @@ def pull_request(branch: StrBranchName) -> dict | None:
     return pull_requests[0]
   else:
     return None
+
+def prompt(question: str, default: bool | None = False) -> bool | None:
+  valid = { 'yes': True, 'y': True, 'ye': True, 'no': False, 'n': False }
+
+  while True:
+    sys.stdout.write(question + { None: ' [y/n] ', True: ' [Y/n] ', False: ' [y/N] ' }[default])
+
+    try:
+      choice = input().lower().strip()
+    except KeyboardInterrupt as exception:
+      choice = 'no'
+
+    if choice in valid:
+      return valid[choice]
+    elif choice == '' and default is not None:
+      return default
+    else:
+      sys.stdout.write("Please respond with 'yes' or 'no' (or 'y' or 'n').\n")
 
 if __name__ == "__main__":
   raise SystemExit(main())
