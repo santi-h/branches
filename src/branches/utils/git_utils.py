@@ -1,5 +1,6 @@
 import os
 import git
+from git import Commit
 import re
 
 class GitUtils:
@@ -55,10 +56,10 @@ class GitUtils:
     ]).split('\n')
     return [branch.replace('*', '').strip() for branch in branches if branch]
 
-  def local_sha(self, branch):
+  def local_sha_from_branch(self, branch: str | None = None) -> str:
     return str(self.local_commit_from_branch(branch))
 
-  def local_commit_from_branch(self, branch):
+  def local_commit_from_branch(self, branch: str) -> Commit:
     return self._repo.branches[branch].commit
 
   def local_commit_from_sha(self, sha):
