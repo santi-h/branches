@@ -400,15 +400,17 @@ def local_branches_order(
 
   return ret
 
-def generate_update_commands(branches: list[StrBranchName],
-                             main_branch: StrBranchName,
-                             no_push: bool,
-                             branches_deletable: list[StrBranchName],
-                             unsynced_main: bool,
-                             branches_behind: list[StrBranchName],
-                             branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
-                             branches_with_merge_commits: list[StrBranchName],
-                             branches_safe_to_push: list[StrBranchName]) -> list[StrCommand]:
+def generate_update_commands(
+  branches: list[StrBranchName],
+  main_branch: StrBranchName,
+  no_push: bool,
+  branches_deletable: list[StrBranchName],
+  unsynced_main: bool,
+  branches_behind: list[StrBranchName],
+  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
+  branches_with_merge_commits: list[StrBranchName],
+  branches_safe_to_push: list[StrBranchName],
+) -> list[StrCommand]:
   """Creates and returns the list of git commands to run to update the branches."""
   update_commands = []
 
@@ -454,10 +456,12 @@ def generate_update_commands(branches: list[StrBranchName],
 
   return update_commands
 
-def rebase_command(branch_to_rebase: StrBranchName,
-                   base_branch: StrShaRef,
-                   branches_safe_to_push: list[StrBranchName] = [],
-                   no_push: bool = False) -> StrCommand:
+def rebase_command(
+  branch_to_rebase: StrBranchName,
+  base_branch: StrShaRef,
+  branches_safe_to_push: list[StrBranchName] = [],
+  no_push: bool = False,
+) -> StrCommand:
   """Returns the rebase command for `branch_to_rebase`."""
   ret = f'git checkout {branch_to_rebase} && git rebase {base_branch}'
 
@@ -466,8 +470,9 @@ def rebase_command(branch_to_rebase: StrBranchName,
 
   return ret
 
-def branches_ahead_shas_to_refs(branches_ahead_shas: dict[StrBranchName, list[StrShaShort]]
-                                ) -> list[tuple[StrBranchName, list[StrShaRef]]]:
+def branches_ahead_shas_to_refs(
+  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]]
+) -> list[tuple[StrBranchName, list[StrShaRef]]]:
   """Converts a dictionary of branches and their ahead SHAs to a list of branch refs.
 
   Args:
@@ -530,8 +535,10 @@ def rebase_order(base_branches: dict[StrBranchName, StrShaRef]) -> list[StrBranc
 
   return ret
 
-def rebase_order_for(branch: StrBranchName,
-                     base_branches: dict[StrBranchName, StrShaRef]) -> list[StrBranchName]:
+def rebase_order_for(
+  branch: StrBranchName,
+  base_branches: dict[StrBranchName, StrShaRef]
+) -> list[StrBranchName]:
   """
   Recursively determines the rebase order for a given branch.
 
@@ -551,8 +558,8 @@ def rebase_order_for(branch: StrBranchName,
     return [branch]
 
 def base_branches_from_branches_ahead_refs(
-    branches_ahead_refs: list[tuple[StrBranchName, list[StrShaRef]]]) \
-      -> dict[StrBranchName, StrShaRef]:
+  branches_ahead_refs: list[tuple[StrBranchName, list[StrShaRef]]]
+) -> dict[StrBranchName, StrShaRef]:
   """Determines the base branch for each branch from a list of ahead refs.
 
   Args:
