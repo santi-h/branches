@@ -1,19 +1,39 @@
 import os
 import git
+from git import Commit
 import re
 
 
 class GitUtils:
-  def __init__(self, repo_path=os.getcwd()):
+  @classmethod
+  def repo_from_path(cls, repo_path: str | None = None) -> git.Repo | None:
+    """Can be used to check whether a path is a git repository or not"""
+    if repo_path is None:
+      repo_path = os.getcwd()
+
+    ret = None
+
     while True:
       try:
-        self._repo = git.Repo(repo_path)
+        ret = git.Repo(repo_path)
         break
-      except git.exc.InvalidGitRepositoryError as e:
+      except git.exc.InvalidGitRepositoryError:
         if len(repo_path) > 1:
           repo_path = os.path.dirname(repo_path)
         else:
-          raise e
+          ret = None
+          break
+
+    return ret
+
+  def __init__(self, repo_path: str | None = None, repo: git.Repo | None = None):
+    if repo is not None:
+      self._repo = repo
+    else:
+      self._repo = type(self).repo_from_path(repo_path)
+
+    if self._repo is None:
+      raise Exception("Not a git repository")
 
     self._repo_path = repo_path
     self._cmd = git.cmd.Git(repo_path)
@@ -34,7 +54,7 @@ class GitUtils:
 
     return self._owner_name, self._repo_name
 
-  def current_branch(self):
+  def current_branch(self) -> str | None:
     if self._current_branch:
       return self._current_branch
 
@@ -58,10 +78,29 @@ class GitUtils:
     ).split("\n")
     return [branch.replace("*", "").strip() for branch in branches if branch]
 
-  def local_sha(self, branch):
+  def staged_changes_filepaths(self) -> list[str]:
+    """Returns a list of filepaths. Each filepath has staged changes"""
+    return [diff.a_path for diff in self._repo.index.diff("HEAD")]
+
+  def unstaged_changes_filepaths(self) -> list[str]:
+    """Returns a list of filepaths. Each filepath has unstaged changes"""
+    return [diff.a_path for diff in self._repo.index.diff(None)]
+
+  def untracked_filepaths(self) -> list[str]:
+    """Returns a list of filepaths. Each filepath is a new untracked file"""
+    return self._repo.untracked_files
+
+  def local_sha_from_branch(self, branch: str | None = None) -> str:
+    """Returns the local sha the `branch` points to.
+
+    If `branch` is None, the `current_branch()` is used.
+    """
+    if branch is None:
+      branch = self.current_branch()
+
     return str(self.local_commit_from_branch(branch))
 
-  def local_commit_from_branch(self, branch):
+  def local_commit_from_branch(self, branch: str) -> Commit:
     return self._repo.branches[branch].commit
 
   def local_commit_from_sha(self, sha):
@@ -74,6 +113,13 @@ class GitUtils:
       pass
 
     return ret
+
+  def local_commit(self) -> Commit:
+    return self._repo.head.commit
+
+  def local_sha(self) -> str:
+    """Returns the sha of HEAD"""
+    return str(self.local_commit())
 
   def fetch_sigle_sha(self, sha):
     self._repo.remotes.origin.fetch(sha)
