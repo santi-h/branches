@@ -4,7 +4,8 @@ from src.branches.cli import (
   branches_ahead_shas_to_refs,
   rebase_order,
   base_branches_from_branches_ahead_refs,
-  generate_update_commands
+  generate_update_commands,
+  generate_amend_commands,
 )
 
 class TestBranches(unittest.TestCase):
@@ -35,7 +36,7 @@ class TestBranches(unittest.TestCase):
           'all_branches': ['main', 'feature-a', 'feature-b'],
           'main_branch': 'main',
           'current_branch': 'feature-b',
-          'base_branches': {'feature-b': 'feature-a~2'},
+          'base_branches': {'feature-b': ('feature-a~2', 1)},
           'short': True,
         },
         ['main', 'feature-b', 'feature-a']
@@ -45,7 +46,7 @@ class TestBranches(unittest.TestCase):
           'all_branches': ['main', 'feature-a', 'feature-b'],
           'main_branch': 'main',
           'current_branch': 'feature-b',
-          'base_branches': {'feature-a': 'feature-b~2'},
+          'base_branches': {'feature-a': ('feature-b~2', 1)},
           'short': True,
         },
         ['main', 'feature-b', 'feature-a']
@@ -56,10 +57,10 @@ class TestBranches(unittest.TestCase):
           'main_branch': 'main',
           'current_branch': 'feature-b',
           'base_branches': {
-            'feature-b': 'feature-a~2',
-            'feature-c': 'feature-b~1',
-            'feature-d': 'feature-c~54',
-            'feature-e': 'feature-a~1'
+            'feature-b': ('feature-a~2', 1),
+            'feature-c': ('feature-b~1', 1),
+            'feature-d': ('feature-c~54', 1),
+            'feature-e': ('feature-a~1', 1),
           },
           'short': True,
         },
@@ -71,9 +72,9 @@ class TestBranches(unittest.TestCase):
           'main_branch': 'main',
           'current_branch': 'feature-b',
           'base_branches': {
-            'feature-c': 'feature-b~1',
-            'feature-d': 'feature-c~54',
-            'feature-e': 'feature-a~1'
+            'feature-c': ('feature-b~1', 1),
+            'feature-d': ('feature-c~54', 1),
+            'feature-e': ('feature-a~1', 1),
           },
           'short': True,
         },
@@ -85,9 +86,9 @@ class TestBranches(unittest.TestCase):
           'main_branch': 'main',
           'current_branch': 'feature-c',
           'base_branches': {
-            'feature-c': 'feature-b~1',
-            'feature-d': 'feature-c~54',
-            'feature-e': 'feature-a~1'
+            'feature-c': ('feature-b~1', 1),
+            'feature-d': ('feature-c~54', 1),
+            'feature-e': ('feature-a~1', 1),
           },
           'short': True,
         },
@@ -99,9 +100,9 @@ class TestBranches(unittest.TestCase):
           'main_branch': 'main',
           'current_branch': 'main',
           'base_branches': {
-            'feature-c': 'feature-b~1',
-            'feature-d': 'feature-c~54',
-            'feature-e': 'feature-a~1'
+            'feature-c': ('feature-b~1', 1),
+            'feature-d': ('feature-c~54', 1),
+            'feature-e': ('feature-a~1', 1),
           },
           'short': True,
         },
@@ -135,12 +136,12 @@ class TestBranches(unittest.TestCase):
 
   def test_rebase_order(self):
     self.assertEqual(rebase_order({
-      'b8': 'b5~1',
-      'b9': 'b8',
-      'b3': 'b2',
-      'b4': 'b3~1',
-      'b6': 'b5',
-      'b7': 'b6'
+      'b8': ('b5~1', 1),
+      'b9': ('b8', 1),
+      'b3': ('b2', 1),
+      'b4': ('b3~1', 1),
+      'b6': ('b5', 1),
+      'b7': ('b6', 1),
     }), ['b5', 'b8', 'b9', 'b2', 'b3', 'b4', 'b6', 'b7'])
 
   def test_base_branches_from_branches_ahead_refs(self):
@@ -154,12 +155,12 @@ class TestBranches(unittest.TestCase):
       ('b6', ['b5~1', 'b5', 'b6']),
       ('b7', ['b5~1', 'b5', 'b6', 'b7'])
     ]), {
-      'b8': 'b5~1',
-      'b9': 'b8',
-      'b3': 'b2',
-      'b4': 'b3~1',
-      'b6': 'b5',
-      'b7': 'b6'
+      'b8': ('b5~1', 1),
+      'b9': ('b8', 0),
+      'b3': ('b2', 2),
+      'b4': ('b3~1', 1),
+      'b6': ('b5', 1),
+      'b7': ('b6', 1),
     })
 
   def test_generate_update_commands(self):
@@ -215,13 +216,28 @@ class TestBranches(unittest.TestCase):
           'git checkout main',
           'git branch -D test-branch-3',
           'git checkout b10 && git rebase main',
-          'git checkout b8 && git rebase b10~2',
-          'git checkout b9 && git rebase b10~1 && git push -f',
+          'git checkout b8 && git rebase --onto b10~2 b8~2',
+          'git checkout b9 && git rebase --onto b10~1 b9~1 && git push -f',
           'git checkout test-branch-1 && git rebase main',
           'git checkout test-branch-2 && git rebase main',
           'git checkout main'
         ]
       ], [
+        #             I      <- b7
+        #            /
+        #           H        <- b6
+        #          /
+        #         E          <- b5
+        #        /
+        #       A---B        <- b8, b9
+        #      /
+        # *---*---*          <- main, b1
+        #          \
+        #           C        <- b2
+        #            \
+        #             D---F  <- b3
+        #              \
+        #               G    <- b4
         {
           'branches': ['main', 'b8', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b9', 'b1'],
           'main_branch': 'main',
@@ -230,27 +246,87 @@ class TestBranches(unittest.TestCase):
           'unsynced_main': False,
           'branches_behind': ['b8', 'b5', 'b6', 'b7', 'b9'],
           'branches_ahead_shas': {
-            'b8': ['b4a32', 'a2582'],
-            'b2': ['38089'],
-            'b3': ['38089', '42d83', '21d67'],
-            'b4': ['38089', '42d83', '1f95c'],
-            'b5': ['b4a32', '31b9b'],
-            'b6': ['b4a32', '31b9b', '975a7'],
-            'b7': ['b4a32', '31b9b', '975a7', '3d1a4'],
-            'b9': ['b4a32', 'a2582']
+            'b8': ['aaaaa', 'bbbbb'],
+            'b2': ['ccccc'],
+            'b3': ['ccccc', 'ddddd', 'fffff'],
+            'b4': ['ccccc', 'ddddd', 'ggggg'],
+            'b5': ['aaaaa', 'eeeee'],
+            'b6': ['aaaaa', 'eeeee', 'hhhhh'],
+            'b7': ['aaaaa', 'eeeee', 'hhhhh', 'iiiii'],
+            'b9': ['aaaaa', 'bbbbb']
           },
           'branches_with_merge_commits': [],
           'branches_safe_to_push': []
         }, [
           'git checkout b5 && git rebase main',
-          'git checkout b8 && git rebase b5~1',
-          'git checkout b9 && git rebase b8',
-          'git checkout b6 && git rebase b5',
-          'git checkout b7 && git rebase b6',
+          'git checkout b8 && git rebase --onto b5~1 b8~1',
+          'git checkout b9 && git reset --hard b8',
+          'git checkout b6 && git rebase --onto b5 b6~1',
+          'git checkout b7 && git rebase --onto b6 b7~1',
           'git checkout main'
         ]
-      ]
+      ],
     ]
 
     for test_case in test_cases:
       self.assertEqual(generate_update_commands(**test_case[0]), test_case[1])
+
+  def test_generate_amend_commands(self):
+    test_cases = [
+      [
+        #                 P      <-  branch6
+        #                /
+        #               | N---O  <-  branch5
+        #               |/
+        #               M        <-  branch3, branch4
+        #              /
+        #         K---L          <- *branch2
+        #        /
+        #       I---J            <-  branch1
+        #      /
+        # A---B---C---E---F      <-  main
+        {
+          'current_branch': 'branch2',
+          'no_push': False,
+          'branches_deletable': [],
+          'branches_ahead_shas': {
+            'branch1': ['iiiii', 'jjjjj'],
+            'branch5': ['iiiii', 'kkkkk', 'lllll', 'mmmmm', 'nnnnn', 'ooooo'],
+            'branch6': ['iiiii', 'kkkkk', 'lllll', 'mmmmm', 'ppppp'],
+            'branch2': ['iiiii', 'kkkkk', 'lllll'],
+            'branch3': ['iiiii', 'kkkkk', 'lllll', 'mmmmm'],
+            'branch4': ['iiiii', 'kkkkk', 'lllll', 'mmmmm'],
+          },
+          'branches_with_merge_commits': [],
+          'branches_safe_to_push': [],
+        }, [
+          'git commit --amend --no-edit',
+          'git checkout branch3 && git rebase --onto branch2 branch3~1',
+          'git checkout branch4 && git reset --hard branch3',
+          'git checkout branch6 && git rebase --onto branch3 branch6~1',
+          'git checkout branch5 && git rebase --onto branch3 branch5~2',
+          'git checkout branch2',
+        ]
+      ], [
+        {
+          'current_branch': 'branch1',
+          'no_push': False,
+          'branches_deletable': [],
+          'branches_ahead_shas': {
+            'branch1': ['iiiii', 'jjjjj'],
+            'branch5': ['iiiii', 'kkkkk', 'lllll', 'mmmmm', 'nnnnn', 'ooooo'],
+            'branch6': ['iiiii', 'kkkkk', 'lllll', 'mmmmm', 'ppppp'],
+            'branch2': ['iiiii', 'kkkkk', 'lllll'],
+            'branch3': ['iiiii', 'kkkkk', 'lllll', 'mmmmm'],
+            'branch4': ['iiiii', 'kkkkk', 'lllll', 'mmmmm'],
+          },
+          'branches_with_merge_commits': [],
+          'branches_safe_to_push': [],
+        }, [
+          'git commit --amend --no-edit',
+        ]
+      ],
+    ]
+
+    for test_case in test_cases:
+      self.assertEqual(generate_amend_commands(**test_case[0]), test_case[1])

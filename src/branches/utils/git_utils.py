@@ -50,6 +50,13 @@ class GitUtils:
     return [branch.replace('*', '').strip() for branch in branches if branch]
 
   def local_sha_from_branch(self, branch: str | None = None) -> str:
+    """Returns the local sha the `branch` points to.
+
+    If `branch` is None, the `current_branch()` is used.
+    """
+    if branch is None:
+      branch = self.current_branch()
+
     return str(self.local_commit_from_branch(branch))
 
   def local_commit_from_branch(self, branch: str) -> Commit:
@@ -65,6 +72,13 @@ class GitUtils:
       pass
 
     return ret
+
+  def local_commit(self) -> Commit:
+    return self._repo.head.commit
+
+  def local_sha(self) -> str:
+    """Returns the sha of HEAD"""
+    return str(self.local_commit())
 
   def fetch_sigle_sha(self, sha):
     self._repo.remotes.origin.fetch(sha)

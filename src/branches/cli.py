@@ -86,10 +86,14 @@ PR_STATUS_COLORS = {
 def main() -> int:
   """Entry point for the CLI."""
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('-s', '--short', action='store_true', default=False,
-                      help='Show a short list only')
   parser.add_argument('--no-push', action='store_true', default=False,
                       help='Do not suggest push commands')
+
+  group = parser.add_mutually_exclusive_group()
+  group.add_argument('operation', nargs='?', choices=['amend'], help='Operation')
+  group.add_argument('-s', '--short', action='store_true', default=False,
+                    help='Show a short list only')
+
   return branches(parser.parse_args())
 
 def branches(args: argparse.Namespace) -> int:
@@ -107,10 +111,20 @@ def branches(args: argparse.Namespace) -> int:
   for _column_key, column_attr in COLUMNS.items():
     table.add_column(column_attr['column_name'], **(column_attr['column_props'] or {}))
 
+  if args.operation == 'amend':
+    # TODO: make sure we're looking at a branch, if not, raise error here
+    args.short = True
+
   with Live(table, console=console, refresh_per_second=20):
     update_commands_params = print_table(args, table)
 
-  update_commands = generate_update_commands(**update_commands_params)
+  if args.operation is None:
+    update_commands = generate_update_commands(**update_commands_params)
+  elif args.operation == 'amend':
+    update_commands = generate_amend_commands(**update_commands_params)
+  else:
+    update_commands = [] # Unexpected
+
   if len(update_commands) > 0:
     print('')
     print(' && \\\n'.join(update_commands))
@@ -144,6 +158,7 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
   all_branches = git_utils.branches()
 
   ret['main_branch'] = main_branch
+  ret['current_branch'] = git_utils.current_branch()
 
   branch_distances = {}
   for branch in all_branches:
@@ -167,7 +182,7 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
   ret['branches'] = local_branches_order(
     all_branches,
     main_branch,
-    git_utils.current_branch(),
+    ret['current_branch'],
     base_branches,
     args.short
   )
@@ -175,7 +190,7 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
   remote_shas = git_utils.remote_shas(ret['branches'])
   show_warnings = True
   for branch in ret['branches']:
-    base_branch = base_branches.get(branch, None)
+    base_branch = base_branches.get(branch, [None, None])[0]
     row_dict = table_row(
       branch,
       git_utils,
@@ -348,7 +363,7 @@ def local_branches_order(
   all_branches: list[StrBranchName],
   main_branch: StrBranchName,
   current_branch: StrBranchName,
-  base_branches: dict[StrBranchName, StrShaRef],
+  base_branches: dict[StrBranchName, tuple[StrShaRef, int]],
   short: bool
 ) -> list[StrBranchName]:
   """Defines what branches will be output in the table.
@@ -359,7 +374,7 @@ def local_branches_order(
   """
   if short:
     dependent_branches: dict[StrBranchName, list[StrBranchName]] = {}
-    for dependent_branch, base_branch_ref in base_branches.items():
+    for dependent_branch, (base_branch_ref, commit_count) in base_branches.items():
       base_branch = branch_name_from_sha_ref(base_branch_ref)
       dependent_branches[base_branch] = dependent_branches.get(base_branch, [])
       dependent_branches[base_branch].append(dependent_branch)
@@ -376,7 +391,7 @@ def local_branches_order(
       branch = queue.pop()
 
       if branch in base_branches:
-        branch_to_add = branch_name_from_sha_ref(base_branches[branch])
+        branch_to_add = branch_name_from_sha_ref(base_branches[branch][0])
         if branch_to_add not in queue_saw:
           ret.append(branch_to_add)
           queue.append(branch_to_add)
@@ -400,6 +415,36 @@ def local_branches_order(
 
   return ret
 
+def generate_amend_commands(
+  current_branch: StrBranchName,
+  no_push: bool,
+  branches_deletable: list[StrBranchName],
+  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
+  branches_with_merge_commits: list[StrBranchName],
+  branches_safe_to_push: list[StrBranchName],
+  **kwargs,
+) -> list[StrCommand]:
+  relevant_branches_ahead_shas: dict[StrBranchName, list[StrShaShort]] = {}
+  for branch, shas in branches_ahead_shas.items():
+    if branch == current_branch:
+      continue
+
+    if shas[:len(branches_ahead_shas[current_branch])] == branches_ahead_shas[current_branch]:
+      relevant_branches_ahead_shas[branch] = shas[len(branches_ahead_shas[current_branch]):]
+
+  return ['git commit --amend --no-edit'] + generate_update_commands(
+    relevant_branches_ahead_shas.keys(),
+    current_branch,
+    no_push,
+    branches_deletable,
+    False,
+    relevant_branches_ahead_shas.keys(),
+    relevant_branches_ahead_shas,
+    branches_with_merge_commits, # TODO: this probably needs to be recomputed
+    branches_safe_to_push,
+    True,
+  )
+
 def generate_update_commands(
   branches: list[StrBranchName],
   main_branch: StrBranchName,
@@ -410,6 +455,8 @@ def generate_update_commands(
   branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
   branches_with_merge_commits: list[StrBranchName],
   branches_safe_to_push: list[StrBranchName],
+  main_branch_is_a_base_branch: bool = False,
+  **kwargs,
 ) -> list[StrCommand]:
   """Creates and returns the list of git commands to run to update the branches."""
   update_commands = []
@@ -446,9 +493,24 @@ def generate_update_commands(
     for branch_to_rebase in rebase_order(base_branches) + branches_to_rebase:
       if branch_to_rebase not in branches_to_rebase or branch_to_rebase in rebased_branches:
         continue
-      base_branch = base_branches.get(branch_to_rebase, main_branch)
-      cmd = rebase_command(branch_to_rebase, base_branch, branches_safe_to_push, no_push)
-      update_commands.append(cmd)
+
+      if branch_to_rebase in base_branches:
+        base_branch, starting_from = base_branches[branch_to_rebase]
+      elif main_branch_is_a_base_branch:
+        base_branch = main_branch
+        starting_from = len(branches_ahead_shas.get(branch_to_rebase, []))
+      else:
+        base_branch = main_branch
+        starting_from = None
+
+      update_commands.append(rebase_command(
+        branch_to_rebase,
+        base_branch,
+        branches_safe_to_push,
+        no_push,
+        starting_from
+      ))
+
       rebased_branches.append(branch_to_rebase)
 
   if len(update_commands) > 0:
@@ -461,9 +523,17 @@ def rebase_command(
   base_branch: StrShaRef,
   branches_safe_to_push: list[StrBranchName] = [],
   no_push: bool = False,
+  starting_from: int | None = None,
 ) -> StrCommand:
   """Returns the rebase command for `branch_to_rebase`."""
-  ret = f'git checkout {branch_to_rebase} && git rebase {base_branch}'
+  ret = f'git checkout {branch_to_rebase}'
+
+  if starting_from is None:
+    ret += f' && git rebase {base_branch}'
+  elif starting_from == 0:
+    ret += f' && git reset --hard {base_branch}'
+  else:
+    ret += f' && git rebase --onto {base_branch} {branch_to_rebase}~{starting_from}'
 
   if branch_to_rebase in branches_safe_to_push and not no_push:
     ret += ' && git push -f'
@@ -516,7 +586,7 @@ def branches_ahead_shas_to_refs(
 
   return branches_ahead_refs
 
-def rebase_order(base_branches: dict[StrBranchName, StrShaRef]) -> list[StrBranchName]:
+def rebase_order(base_branches: dict[StrBranchName, tuple[StrShaRef, int]]) -> list[StrBranchName]:
   """
   Determines the order in which branches should be rebased based on their base branches.
 
@@ -537,7 +607,7 @@ def rebase_order(base_branches: dict[StrBranchName, StrShaRef]) -> list[StrBranc
 
 def rebase_order_for(
   branch: StrBranchName,
-  base_branches: dict[StrBranchName, StrShaRef]
+  base_branches: dict[StrBranchName, tuple[StrShaRef, int]]
 ) -> list[StrBranchName]:
   """
   Recursively determines the rebase order for a given branch.
@@ -550,7 +620,7 @@ def rebase_order_for(
     list: Ordered list of branches for rebasing.
   """
   if branch in base_branches:
-    parent_branch = branch_name_from_sha_ref(base_branches[branch])
+    parent_branch = branch_name_from_sha_ref(base_branches[branch][0])
     ret = rebase_order_for(parent_branch, base_branches)
     ret.append(branch)
     return ret
@@ -559,23 +629,36 @@ def rebase_order_for(
 
 def base_branches_from_branches_ahead_refs(
   branches_ahead_refs: list[tuple[StrBranchName, list[StrShaRef]]]
-) -> dict[StrBranchName, StrShaRef]:
+) -> dict[StrBranchName, tuple[StrShaRef, int]]:
   """Determines the base branch for each branch from a list of ahead refs.
 
   Args:
-    List of [branch, refs] pairs.
+    List of [branch, refs] pairs. For example:
+      [
+        ('b2', ['b2']),
+        ('b5', ['b5~1', 'b5']),
+        ('b3', ['b2', 'b3~1', 'b3']),
+        ('b6', ['b5~1', 'b5', 'b6'])
+      ]
 
   Returns:
-    Mapping of branch names to their base branch refs.
+    A dict mapping of branch names to their base branch refs and how many commits on top of their
+    base branch they have. For example:
+      {
+        "b3": ("b2", 2),
+        "b6": ("b5", 1)
+      }
   """
   ret = {}
 
   for branch, refs in branches_ahead_refs:
+    commit_count = 0
     for ref in reversed(refs):
       parent_branch = re.search(r'^\s*(.*?)(?:~\d+)?\s*$', ref).group(1)
       if parent_branch != branch:
-        ret[branch] = ref
+        ret[branch] = (ref, commit_count)
         break
+      commit_count += 1
 
   return ret
 
