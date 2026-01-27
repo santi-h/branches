@@ -168,6 +168,138 @@ pytest -k test_generate_update_commands
 
 ## TODOs
 
+TODO
+
+## Development: running tests
+
+To run all tests:
+
+```shell
+rm -rf dist/ build/ && \
+pyinstaller --onedir --name branches --paths src src/branches/__main__.py && \
+rm -rf build/
+```
+
+The second to last line could be replaced with `pyinstaller branches.spec`
+
+## Distribution Step 2: Create Github Release
+
+```shell
+python -m unittest tests.branches.test_branches.TestBranches.test_generate_update_commands
+```
+
+## Test Setups
+
+Git setups that can be used as starting points for manual testing. These can eventually be moved to the test suite for automated high level testing.
+
+```plain
+                P      <- branch6
+               /
+              | N---O  <- branch5
+              |/
+              M        <- branch3, branch4
+             /
+        K---L          <- branch2
+       /
+      I---J            <- branch1
+     /
+A---B---C---E---F      <- main
+
+git init && \
+echo 'A.txt' > A.txt && git add . && git commit -m 'A' && \
+echo 'B.txt' > B.txt && git add . && git commit -m 'B' && \
+git checkout -b branch1 && \
+echo 'I.txt' > I.txt && git add . && git commit -m 'I' && \
+git checkout -b branch2 && \
+echo 'K.txt' > K.txt && git add . && git commit -m 'K' && \
+echo 'L.txt' > L.txt && git add . && git commit -m 'L' && \
+git checkout -b branch3 && \
+echo 'M.txt' > M.txt && git add . && git commit -m 'M' && \
+git checkout -b branch4 && \
+git checkout -b branch6 && \
+echo 'P.txt' > P.txt && git add . && git commit -m 'P' && \
+git checkout branch3 && \
+git checkout -b branch5 && \
+echo 'N.txt' > N.txt && git add . && git commit -m 'N' && \
+echo 'O.txt' > O.txt && git add . && git commit -m 'O' && \
+git checkout branch1 && \
+echo 'J.txt' > J.txt && git add . && git commit -m 'J' && \
+git checkout main && \
+echo 'C.txt' > C.txt && git add . && git commit -m 'C' && \
+echo 'E.txt' > E.txt && git add . && git commit -m 'E' && \
+echo 'F.txt' > F.txt && git add . && git commit -m 'F'
+```
+
+```plain
+            G      <- branch4
+           /
+          E        <- branch2, branch3
+         /
+        D          <- branch1
+       /
+      /       I    <- branch5
+     /       /
+A---B---C---F---H  <- main
+
+git init && \
+echo 'A.txt' > A.txt && git add . && git commit -m 'A' && \
+echo 'B.txt' > B.txt && git add . && git commit -m 'B' && \
+git checkout -b branch1 && \
+echo 'D.txt' > D.txt && git add . && git commit -m 'D' && \
+git checkout -b branch2 && \
+echo 'E.txt' > E.txt && git add . && git commit -m 'E' && \
+git checkout -b branch3 && \
+git checkout -b branch4 && \
+echo 'G.txt' > G.txt && git add . && git commit -m 'G' && \
+git checkout main && \
+echo 'C.txt' > C.txt && git add . && git commit -m 'C' && \
+echo 'F.txt' > F.txt && git add . && git commit -m 'F' && \
+git checkout -b branch5 && \
+echo 'I.txt' > I.txt && git add . && git commit -m 'I' && \
+git checkout main && \
+echo 'H.txt' > H.txt && git add . && git commit -m 'H'
+```
+
+```plain
+            I      <- branch4
+           /
+          G
+         /
+        | F        <- branch3
+        |/
+        E          <- branch2
+       /
+      D            <- branch1, branch5
+     /
+A---B---C---H      <- main
+
+git init && \
+echo 'A.txt' > A.txt && git add . && git commit -m 'A' && \
+echo 'B.txt' > B.txt && git add . && git commit -m 'B' && \
+git checkout -b branch1 && \
+echo 'D.txt' > D.txt && git add . && git commit -m 'D' && \
+git checkout -b branch5 && \
+git checkout -b branch2 && \
+echo 'E.txt' > E.txt && git add . && git commit -m 'E' && \
+git checkout -b branch3 && \
+echo 'F.txt' > F.txt && git add . && git commit -m 'F' && \
+git checkout branch2 && \
+git checkout -b branch4 && \
+echo 'G.txt' > G.txt && git add . && git commit -m 'G' && \
+echo 'I.txt' > I.txt && git add . && git commit -m 'I' && \
+git checkout main && \
+echo 'C.txt' > C.txt && git add . && git commit -m 'C' && \
+echo 'H.txt' > H.txt && git add . && git commit -m 'H'
+```
+
+To clean up and redo:
+
+```bash
+rm -rf ./.git && rm ./*
+```
+
+## TODOs
+
 - [ ] When main is ahead locally the cleanup command is suggesting to "git pull" main. In these cases a warning should be displayed and no update commands should be suggested. The user would have to either push their main branch changes first, or branch off them and drop the ahead commits.
 - [ ] Test case when main is merged onto the local feature branch. When main moves on, should `branches` suggest rebase commands for the local feature branch?
 - [ ] If multiple people added commits to a local feature branch, don't suggest rebasing.
@@ -179,11 +311,14 @@ pytest -k test_generate_update_commands
 
 ```shell
 rm -rf dist/ build/ && \
+pip freeze | xargs pip uninstall -y && \
+pip install -r requirements_lock.txt && \
+pip install pyinstaller && \
 pyinstaller --onedir --name branches --paths src src/branches/__main__.py && \
 rm -rf build/
 ```
 
-The second to last line could be replaced with `pyinstaller branches.spec`
+The last line could be replaced with `pyinstaller branches.spec`
 
 ## Distribution Step 2: Create Github Release
 
