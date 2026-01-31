@@ -44,8 +44,15 @@ class GitUtils:
 
     return self._current_branch
 
-  def branches(self):
-    branches = self._cmd.execute(['git', 'branch']).split('\n')
+  def branches(self) -> list[str]:
+    branches = self._cmd.execute([
+      "git",
+      "for-each-ref",
+      "--sort=refname",
+      "--sort=-authordate",
+      "--format=%(refname:short)",
+      "refs/heads/",
+    ]).split('\n')
     return [branch.replace('*', '').strip() for branch in branches if branch]
 
   def local_sha(self, branch):
