@@ -151,13 +151,19 @@ pip install -U pip-tools
 To run all tests:
 
 ```shell
-python -m unittest
+pytest
+```
+
+To run a specific file:
+
+```shell
+pytest -k test_branches.py
 ```
 
 To run a specific test:
 
 ```shell
-python -m unittest tests.branches.test_branches.TestBranches.test_generate_update_commands
+pytest -k test_generate_update_commands
 ```
 
 ## TODOs
