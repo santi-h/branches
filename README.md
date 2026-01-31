@@ -28,6 +28,7 @@ The script does not run any write `git` command. It only outputs suggested `git`
 
 - Clean up merged branches that are already on the main branch.
 - Get all branches up to date (via `rebase`), respecting the tree structure.
+
     ```plain
                      branches
                      operations
@@ -41,6 +42,7 @@ The script does not run any write `git` command. It only outputs suggested `git`
          /                   /
     A---B---C---E---F---G---H               <- main
     ```
+
 - Push the branches that are currently in sync with `origin` and the current user is the only author.
 - Safely pull updates that exist in `origin` but not locally
 
@@ -87,6 +89,77 @@ In a git repo, just run `branches`
 branches
 ```
 
+## Development: setup
+
+I recommend setting up:
+
+- [`direnv`](https://direnv.net)
+- [`pyenv`](https://formulae.brew.sh/formula/pyenv) + [`pyenv-virtualenv`](https://formulae.brew.sh/formula/pyenv-virtualenv)
+
+Steps:
+
+- Create virtualenv:
+
+```shell
+pyenv virtualenv `cat .python-version` branches
+```
+
+- Set direnv so every time you `cd` into this directory it uses the virtualenv created above:
+
+```shell
+echo 'export PYENV_VERSION=branches' > .envrc
+```
+
+(allow if prompted)
+
+- Install `pip-tools` with `pip install -U pip-tools`. See [`pip-tools` docs](https://pypi.org/project/pip-tools).
+
+- Install `pypi` dependencies:
+
+```shell
+pip-sync requirements-dev.txt
+```
+
+## Development: dependencies
+
+To upgrade all dependencies:
+
+```shell
+pip-compile --output-file=requirements.txt requirements.in --upgrade
+pip-compile --output-file=requirements-dev.txt requirements-dev.in --upgrade
+```
+
+When adding/removing dependencies to the `.in` files:
+
+```shell
+pip-compile --output-file=requirements.txt requirements.in
+pip-compile --output-file=requirements-dev.txt requirements-dev.in
+```
+
+## Development: clean slate
+
+Assuming `.envrc` stays
+
+```shell
+pyenv virtualenv-delete -f branches &&
+pyenv virtualenv `cat .python-version` branches &&
+pip install -U pip-tools
+```
+
+## Development: running tests
+
+To run all tests:
+
+```shell
+python -m unittest
+```
+
+To run a specific test:
+
+```shell
+python -m unittest tests.branches.test_branches.TestBranches.test_generate_update_commands
+```
+
 ## TODOs
 
 - [ ] When main is ahead locally the cleanup command is suggesting to "git pull" main. In these cases a warning should be displayed and no update commands should be suggested. The user would have to either push their main branch changes first, or branch off them and drop the ahead commits.
@@ -100,14 +173,11 @@ branches
 
 ```shell
 rm -rf dist/ build/ && \
-pip freeze | xargs pip uninstall -y && \
-pip install -r requirements_lock.txt && \
-pip install pyinstaller && \
 pyinstaller --onedir --name branches --paths src src/branches/__main__.py && \
 rm -rf build/
 ```
 
-The last line could be replaced with `pyinstaller branches.spec`
+The second to last line could be replaced with `pyinstaller branches.spec`
 
 ## Distribution Step 2: Create Github Release
 
