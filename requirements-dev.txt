@@ -28,6 +28,8 @@ idna==3.11
     # via
     #   -c requirements.txt
     #   requests
+iniconfig==2.3.0
+    # via pytest
 macholib==1.16.4
     # via pyinstaller
 markdown-it-py==4.0.0
@@ -42,14 +44,20 @@ packaging==26.0
     # via
     #   pyinstaller
     #   pyinstaller-hooks-contrib
+    #   pytest
+pluggy==1.6.0
+    # via pytest
 pygments==2.19.2
     # via
     #   -c requirements.txt
+    #   pytest
     #   rich
 pyinstaller==6.18.0
     # via -r requirements-dev.in
 pyinstaller-hooks-contrib==2026.0
     # via pyinstaller
+pytest==9.0.2
+    # via -r requirements-dev.in
 requests==2.32.5
     # via
     #   -c requirements.txt
