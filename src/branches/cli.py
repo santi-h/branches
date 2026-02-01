@@ -15,83 +15,64 @@ from datetime import datetime, timezone
 import re
 import copy
 from typing import TypeAlias
-import os
 
 # Using some TypeAliases just for readability / documentation
 StrBranchName: TypeAlias = str
 StrSha: TypeAlias = str
 StrShaShort: TypeAlias = str
-StrShaRef: TypeAlias = str # Examples: "branch1", "branch1~3", "branch2~1".
+StrShaRef: TypeAlias = str  # Examples: "branch1", "branch1~3", "branch2~1".
 StrCommand: TypeAlias = str
 DictUpdateParams: TypeAlias = dict
 DictTableRow: TypeAlias = dict
 
 console = Console(highlight=False)
 
-LOCAL_SHA_COLOR = 'blue'
-CURRENT_BRANCH_COLOR = 'green'
-MERGE_COMMIT_COLOR = 'dark_orange3'
+LOCAL_SHA_COLOR = "blue"
+CURRENT_BRANCH_COLOR = "green"
+MERGE_COMMIT_COLOR = "dark_orange3"
 
 # Starting with Python 3.7, dictionaries officially maintain the order in which keys were inserted
 # The logic in this script assumes this is the case.
 COLUMNS = {
-  'origin': {
-    'column_name': 'Origin',
-    'column_props': { 'no_wrap': True, 'justify': 'right' }
+  "origin": {"column_name": "Origin", "column_props": {"no_wrap": True, "justify": "right"}},
+  "local": {
+    "column_name": "Local",
+    "column_props": {
+      "no_wrap": True,
+      "justify": "left",
+      "style": f"{LOCAL_SHA_COLOR}",
+      "header_style": f"{LOCAL_SHA_COLOR}",
+    },
   },
-  'local': {
-    'column_name': 'Local',
-    'column_props': {
-      'no_wrap': True,
-      'justify': 'left',
-      'style': f'{LOCAL_SHA_COLOR}',
-      'header_style': f'{LOCAL_SHA_COLOR}'
-    }
+  "age": {
+    "column_name": "Age",
+    "column_props": {
+      "justify": "right",
+      "style": f"{LOCAL_SHA_COLOR}",
+      "header_style": f"{LOCAL_SHA_COLOR}",
+    },
   },
-  'age': {
-    'column_name': 'Age',
-    'column_props': {
-      'justify': 'right',
-      'style': f'{LOCAL_SHA_COLOR}',
-      'header_style': f'{LOCAL_SHA_COLOR}'
-    }
-  },
-  'behind': {
-    'column_name': '<-',
-    'column_props': { 'justify': 'right' }
-  },
-  'ahead': {
-    'column_name': '->',
-    'column_props': { 'justify': 'left' }
-  },
-  'branch': {
-    'column_name': 'Branch',
-    'column_props': None
-  },
-  'base': {
-    'column_name': 'Base',
-    'column_props': None
-  },
-  'pr': {
-    'column_name': 'PR',
-    'column_props': None
-  }
+  "behind": {"column_name": "<-", "column_props": {"justify": "right"}},
+  "ahead": {"column_name": "->", "column_props": {"justify": "left"}},
+  "branch": {"column_name": "Branch", "column_props": None},
+  "base": {"column_name": "Base", "column_props": None},
+  "pr": {"column_name": "PR", "column_props": None},
 }
 
-PR_STATUS_COLORS = {
-  'open': 'green',
-  'closed': 'red',
-  'merged': 'medium_purple1'
-}
+PR_STATUS_COLORS = {"open": "green", "closed": "red", "merged": "medium_purple1"}
+
 
 def main() -> int:
   """Entry point for the CLI."""
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('-s', '--short', action='store_true', default=False,
-                      help='Show a short list only')
-  parser.add_argument('--no-push', action='store_true', default=False,
-                      help='Do not suggest push commands')
+  parser.add_argument(
+    "-s", "--short", action="store_true", default=False, help="Show a short list only"
+  )
+  parser.add_argument(
+    "--no-push", action="store_true", default=False, help="Do not suggest push commands"
+  )
   return branches(parser.parse_args())
+
 
 def branches(args: argparse.Namespace) -> int:
   """Main function to display the branches table and update commands.
@@ -106,20 +87,21 @@ def branches(args: argparse.Namespace) -> int:
 
   table = Table(box=box.SIMPLE_HEAD, header_style="")
   for _column_key, column_attr in COLUMNS.items():
-    table.add_column(column_attr['column_name'], **(column_attr['column_props'] or {}))
+    table.add_column(column_attr["column_name"], **(column_attr["column_props"] or {}))
 
   with Live(table, console=console, refresh_per_second=20):
     update_commands_params = print_table(args, table)
 
   update_commands = generate_update_commands(**update_commands_params)
   if len(update_commands) > 0:
-    print('')
-    print(' && \\\n'.join(update_commands))
-    print('')
-    if 'PYTEST_CURRENT_TEST' not in os.environ and prompt('Run update command?'):
-      ret = subprocess.run(' && '.join(update_commands), shell=True).returncode
+    print("")
+    print(" && \\\n".join(update_commands))
+    print("")
+    if "PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?"):
+      ret = subprocess.run(" && ".join(update_commands), shell=True).returncode
 
   return ret
+
 
 def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
   """Prints out the state of all local branches in a table.
@@ -129,22 +111,22 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
     the arguments to the function that outputs the update commands.
   """
   ret = {
-    'branches': None,
-    'main_branch': None,
-    'no_push': args.no_push,
-    'branches_deletable': [],
-    'unsynced_main': False,
-    'branches_behind': [],
-    'branches_ahead_shas': {},
-    'branches_with_merge_commits': [],
-    'branches_safe_to_push': [],
+    "branches": None,
+    "main_branch": None,
+    "no_push": args.no_push,
+    "branches_deletable": [],
+    "unsynced_main": False,
+    "branches_behind": [],
+    "branches_ahead_shas": {},
+    "branches_with_merge_commits": [],
+    "branches_safe_to_push": [],
   }
 
   git_utils = GitUtils()
   main_branch = git_utils.main_branch()
   all_branches = git_utils.branches()
 
-  ret['main_branch'] = main_branch
+  ret["main_branch"] = main_branch
 
   branch_distances = {}
   for branch in all_branches:
@@ -155,41 +137,34 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
 
     for parents in git_utils.parent_shas_of_ref(branch, branch_distances[branch][0]):
       if len(parents) > 2:
-        ret['branches_with_merge_commits'].append(branch)
+        ret["branches_with_merge_commits"].append(branch)
         break
 
-    if branch not in ret['branches_with_merge_commits']:
-      ret['branches_ahead_shas'][branch] = [
-        sha[:5] for sha in git_utils.shas_ahead_of(main_branch, branch)]
+    if branch not in ret["branches_with_merge_commits"]:
+      ret["branches_ahead_shas"][branch] = [
+        sha[:5] for sha in git_utils.shas_ahead_of(main_branch, branch)
+      ]
 
   base_branches = base_branches_from_branches_ahead_refs(
-    branches_ahead_shas_to_refs(ret['branches_ahead_shas']))
-
-  ret['branches'] = local_branches_order(
-    all_branches,
-    main_branch,
-    git_utils.current_branch(),
-    base_branches,
-    args.short
+    branches_ahead_shas_to_refs(ret["branches_ahead_shas"])
   )
 
-  remote_shas = git_utils.remote_shas(ret['branches'])
+  ret["branches"] = local_branches_order(
+    all_branches, main_branch, git_utils.current_branch(), base_branches, args.short
+  )
+
+  remote_shas = git_utils.remote_shas(ret["branches"])
   show_warnings = True
-  for branch in ret['branches']:
+  for branch in ret["branches"]:
     base_branch = base_branches.get(branch, None)
     row_dict = table_row(
-      branch,
-      git_utils,
-      remote_shas,
-      base_branch,
-      branch_distances,
-      ret,
-      show_warnings
+      branch, git_utils, remote_shas, base_branch, branch_distances, ret, show_warnings
     )
     show_warnings = False
     table.add_row(*[row_dict.get(column_key) for column_key in COLUMNS.keys()])
 
   return ret
+
 
 def table_row(
   branch: StrBranchName,
@@ -218,11 +193,11 @@ def table_row(
     ret: The keys of this dict must be the arguments to the function that outputs the update
       commands.
   """
-  row_dict = {} # See `COLUMNS` for valid keys.
+  row_dict = {}  # See `COLUMNS` for valid keys.
 
-  sync_status = 'not_pushed' # means this branch is not in origin
-              # 'synced'       means this branch is in origin and is the same as local
-              # 'unsynced'     means this branch is in origin but is not the same as local
+  sync_status = "not_pushed"  # means this branch is not in origin
+  # 'synced'       means this branch is in origin and is the same as local
+  # 'unsynced'     means this branch is in origin but is not the same as local
 
   local_commit = git_utils.local_commit_from_branch(branch)
   local_sha = str(local_commit)
@@ -231,126 +206,130 @@ def table_row(
 
   remote_commit = None
   remote_sha = remote_shas.get(branch)
-  remote_sha_short = ''
+  remote_sha_short = ""
   remote_author_emails: set[str] = set()
 
-  for sha in git_utils.shas_ahead_of(ret['main_branch'], branch):
+  for sha in git_utils.shas_ahead_of(ret["main_branch"], branch):
     local_author_emails.add(git_utils.commit_author_email(sha))
 
   if remote_sha is not None:
     remote_sha_short = remote_sha[:5]
     if remote_sha == local_sha:
-      sync_status = 'synced'
+      sync_status = "synced"
     else:
-      sync_status = 'unsynced'
+      sync_status = "unsynced"
       remote_commit = git_utils.local_commit_from_sha(remote_sha)
       if remote_commit is None:
         remote_commit = git_utils.fetch_sigle_sha(remote_sha)
 
-      if branch == ret['main_branch']:
-        ret['unsynced_main'] = True
+      if branch == ret["main_branch"]:
+        ret["unsynced_main"] = True
 
   try:
     pr = pull_request(branch)
-  except requests.exceptions.ConnectionError as exception:
+  except requests.exceptions.ConnectionError:
     pr = None
     if show_warnings:
-      print('WARNING: there is internet connection issues.')
-      print('Network dependent functionality will not work.')
+      print("WARNING: there is internet connection issues.")
+      print("Network dependent functionality will not work.")
 
-  if pr is not None and branch != ret['main_branch']:
-    if pr.get('state') == 'open':
-      pr_status = 'open'
-    elif len(pr.get('merged_at', '') or '') > 0:
-      pr_status = 'merged'
+  if pr is not None and branch != ret["main_branch"]:
+    if pr.get("state") == "open":
+      pr_status = "open"
+    elif len(pr.get("merged_at", "") or "") > 0:
+      pr_status = "merged"
     else:
-      pr_status = 'closed'
+      pr_status = "closed"
 
-    pr_sha = f'{pr['head']['sha'][:5]}'
-    if pr['head']['sha'] == local_sha:
-      pr_sha_status = 'synced'
-      pr_sha = f'[{LOCAL_SHA_COLOR}]{pr_sha}[/{LOCAL_SHA_COLOR}]'
+    pr_sha = f"{pr['head']['sha'][:5]}"
+    if pr["head"]["sha"] == local_sha:
+      pr_sha_status = "synced"
+      pr_sha = f"[{LOCAL_SHA_COLOR}]{pr_sha}[/{LOCAL_SHA_COLOR}]"
     else:
-      pr_sha_status = 'unsynced'
+      pr_sha_status = "unsynced"
 
-    row_dict['pr'] = f'[link={pr['html_url']}][{PR_STATUS_COLORS[pr_status]}]#{pr['number']}' \
-                      f'[/{PR_STATUS_COLORS[pr_status]}][/link] ({pr_sha}) by ' \
-                      f'{pr['user']['login']}'
+    row_dict["pr"] = (
+      f"[link={pr['html_url']}][{PR_STATUS_COLORS[pr_status]}]#{pr['number']}"
+      f"[/{PR_STATUS_COLORS[pr_status]}][/link] ({pr_sha}) by "
+      f"{pr['user']['login']}"
+    )
 
-    if pr_status == 'merged' and pr_sha_status == 'synced' and sync_status == 'not_pushed':
+    if pr_status == "merged" and pr_sha_status == "synced" and sync_status == "not_pushed":
       # Only delete if all of these are true:
       # - This is not the main branch
       # - The PR was merged
       # - The merged code is exactly the same as our local branch
       # - The branch was deleted in origin
-      ret['branches_deletable'].append(branch)
+      ret["branches_deletable"].append(branch)
 
-  if sync_status == 'synced':
-    message_remote_sha = f'[{LOCAL_SHA_COLOR}]{remote_sha_short}[/{LOCAL_SHA_COLOR}]'
-  elif sync_status == 'unsynced':
+  if sync_status == "synced":
+    message_remote_sha = f"[{LOCAL_SHA_COLOR}]{remote_sha_short}[/{LOCAL_SHA_COLOR}]"
+  elif sync_status == "unsynced":
     if remote_commit.committed_date < local_commit.committed_date:
-      message_remote_sha = f'[dim]{remote_sha_short}[/dim]'
+      message_remote_sha = f"[dim]{remote_sha_short}[/dim]"
     else:
-      message_remote_sha = f'[bold]{remote_sha_short}[/bold]'
+      message_remote_sha = f"[bold]{remote_sha_short}[/bold]"
   else:
     message_remote_sha = remote_sha_short
 
-  if sync_status in ['synced', 'unsynced'] and branch != ret['main_branch']:
+  if sync_status in ["synced", "unsynced"] and branch != ret["main_branch"]:
     owner, repo = git_utils.owner_and_repo()
-    url = f'https://github.com/{owner}/{repo}/compare/{ret['main_branch']}...{branch}'
-    message_remote_sha = f'[link={url}]{message_remote_sha}[/link]'
-    for sha in git_utils.shas_ahead_of(ret['main_branch'], remote_sha):
+    url = f"https://github.com/{owner}/{repo}/compare/{ret['main_branch']}...{branch}"
+    message_remote_sha = f"[link={url}]{message_remote_sha}[/link]"
+    for sha in git_utils.shas_ahead_of(ret["main_branch"], remote_sha):
       remote_author_emails.add(git_utils.commit_author_email(sha))
 
   has_different_author = False
 
   if any(email != git_utils.current_user_email() for email in remote_author_emails):
     has_different_author = True
-    message_remote_sha = f'[red]![/red]{message_remote_sha}'
+    message_remote_sha = f"[red]![/red]{message_remote_sha}"
   else:
-    message_remote_sha = f' {message_remote_sha}'
+    message_remote_sha = f" {message_remote_sha}"
 
   if any(email != git_utils.current_user_email() for email in local_author_emails):
     has_different_author = True
-    message_local_sha = f'{local_sha_short}[red]![/red]'
+    message_local_sha = f"{local_sha_short}[red]![/red]"
   else:
-    message_local_sha = f'{local_sha_short} '
+    message_local_sha = f"{local_sha_short} "
 
-  if sync_status == 'synced' and not has_different_author:
-    ret['branches_safe_to_push'].append(branch)
+  if sync_status == "synced" and not has_different_author:
+    ret["branches_safe_to_push"].append(branch)
 
   ahead, behind = branch_distances[branch]
-  row_dict['base'] = base_branch
-  row_dict['origin'] = message_remote_sha
-  row_dict['local'] = message_local_sha
-  row_dict['age'] = str((datetime.now(timezone.utc) - git_utils.date_authored(local_sha)).days)
-  row_dict['branch'] = branch
-  row_dict['ahead'] = str(ahead)
-  row_dict['behind'] = str(behind)
+  row_dict["base"] = base_branch
+  row_dict["origin"] = message_remote_sha
+  row_dict["local"] = message_local_sha
+  row_dict["age"] = str((datetime.now(timezone.utc) - git_utils.date_authored(local_sha)).days)
+  row_dict["branch"] = branch
+  row_dict["ahead"] = str(ahead)
+  row_dict["behind"] = str(behind)
 
   if branch == git_utils.current_branch():
-    row_dict['branch'] = f'[{CURRENT_BRANCH_COLOR}]{row_dict['branch']}[/{CURRENT_BRANCH_COLOR}]'
-    row_dict['ahead'] = f'[{CURRENT_BRANCH_COLOR}]{row_dict['ahead']}[/{CURRENT_BRANCH_COLOR}]'
-    row_dict['behind'] = f'[{CURRENT_BRANCH_COLOR}]{row_dict['behind']}[/{CURRENT_BRANCH_COLOR}]'
+    row_dict["branch"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['branch']}[/{CURRENT_BRANCH_COLOR}]"
+    row_dict["ahead"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['ahead']}[/{CURRENT_BRANCH_COLOR}]"
+    row_dict["behind"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['behind']}[/{CURRENT_BRANCH_COLOR}]"
 
-  if branch in ret['branches_with_merge_commits']:
-    row_dict['ahead'] = f'{row_dict['ahead']} [{MERGE_COMMIT_COLOR}]M[/{MERGE_COMMIT_COLOR}]'
+  if branch in ret["branches_with_merge_commits"]:
+    row_dict["ahead"] = f"{row_dict['ahead']} [{MERGE_COMMIT_COLOR}]M[/{MERGE_COMMIT_COLOR}]"
 
   if behind > 0:
-    ret['branches_behind'].append(branch)
+    ret["branches_behind"].append(branch)
 
   return row_dict
 
+
 def branch_name_from_sha_ref(sha_ref: StrShaRef) -> StrBranchName:
   """Returns the branch name sha_ref references"""
-  return re.search(r'^\s*(.*?)(?:~\d+)?\s*$', sha_ref).group(1)
+  return re.search(r"^\s*(.*?)(?:~\d+)?\s*$", sha_ref).group(1)
+
 
 def local_branches_order(
   all_branches: list[StrBranchName],
   main_branch: StrBranchName,
   current_branch: StrBranchName,
   base_branches: dict[StrBranchName, StrShaRef],
-  short: bool
+  short: bool,
 ) -> list[StrBranchName]:
   """Defines what branches will be output in the table.
 
@@ -401,26 +380,29 @@ def local_branches_order(
 
   return ret
 
-def generate_update_commands(branches: list[StrBranchName],
-                             main_branch: StrBranchName,
-                             no_push: bool,
-                             branches_deletable: list[StrBranchName],
-                             unsynced_main: bool,
-                             branches_behind: list[StrBranchName],
-                             branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
-                             branches_with_merge_commits: list[StrBranchName],
-                             branches_safe_to_push: list[StrBranchName]) -> list[StrCommand]:
+
+def generate_update_commands(
+  branches: list[StrBranchName],
+  main_branch: StrBranchName,
+  no_push: bool,
+  branches_deletable: list[StrBranchName],
+  unsynced_main: bool,
+  branches_behind: list[StrBranchName],
+  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
+  branches_with_merge_commits: list[StrBranchName],
+  branches_safe_to_push: list[StrBranchName],
+) -> list[StrCommand]:
   """Creates and returns the list of git commands to run to update the branches."""
   update_commands = []
 
   branches_ahead_shas = copy.deepcopy(branches_ahead_shas)
   branches_to_rebase = []
   if unsynced_main:
-    update_commands.append(f'git checkout {main_branch} && git pull')
+    update_commands.append(f"git checkout {main_branch} && git pull")
     branches_behind = branches
   else:
     if len(branches_deletable) > 0:
-      update_commands.append(f'git checkout {main_branch}')
+      update_commands.append(f"git checkout {main_branch}")
 
   for branch in branches:
     if branch in branches_with_merge_commits:
@@ -431,14 +413,15 @@ def generate_update_commands(branches: list[StrBranchName],
       branches_to_rebase.append(branch)
 
   for branch_to_delete in branches_deletable:
-    update_commands.append(f'git branch -D {branch_to_delete}')
+    update_commands.append(f"git branch -D {branch_to_delete}")
 
   if len(branches_to_rebase) > 0:
     for branch in branches_deletable:
       branches_ahead_shas.pop(branch, None)
 
     base_branches = base_branches_from_branches_ahead_refs(
-      branches_ahead_shas_to_refs(branches_ahead_shas))
+      branches_ahead_shas_to_refs(branches_ahead_shas)
+    )
 
     rebased_branches = []
 
@@ -451,24 +434,29 @@ def generate_update_commands(branches: list[StrBranchName],
       rebased_branches.append(branch_to_rebase)
 
   if len(update_commands) > 0:
-    update_commands.append(f'git checkout {main_branch}')
+    update_commands.append(f"git checkout {main_branch}")
 
   return update_commands
 
-def rebase_command(branch_to_rebase: StrBranchName,
-                   base_branch: StrShaRef,
-                   branches_safe_to_push: list[StrBranchName] = [],
-                   no_push: bool = False) -> StrCommand:
+
+def rebase_command(
+  branch_to_rebase: StrBranchName,
+  base_branch: StrShaRef,
+  branches_safe_to_push: list[StrBranchName] = [],
+  no_push: bool = False,
+) -> StrCommand:
   """Returns the rebase command for `branch_to_rebase`."""
-  ret = f'git checkout {branch_to_rebase} && git rebase {base_branch}'
+  ret = f"git checkout {branch_to_rebase} && git rebase {base_branch}"
 
   if branch_to_rebase in branches_safe_to_push and not no_push:
-    ret += ' && git push -f'
+    ret += " && git push -f"
 
   return ret
 
-def branches_ahead_shas_to_refs(branches_ahead_shas: dict[StrBranchName, list[StrShaShort]]
-                                ) -> list[tuple[StrBranchName, list[StrShaRef]]]:
+
+def branches_ahead_shas_to_refs(
+  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
+) -> list[tuple[StrBranchName, list[StrShaRef]]]:
   """Converts a dictionary of branches and their ahead SHAs to a list of branch refs.
 
   Args:
@@ -502,7 +490,7 @@ def branches_ahead_shas_to_refs(branches_ahead_shas: dict[StrBranchName, list[St
         if distance <= 0:
           ref = branch
         else:
-          ref = f'{branch}~{distance}'
+          ref = f"{branch}~{distance}"
 
         sha_to_ref[sha] = ref
 
@@ -511,6 +499,7 @@ def branches_ahead_shas_to_refs(branches_ahead_shas: dict[StrBranchName, list[St
     branches_ahead_refs.append(to_append)
 
   return branches_ahead_refs
+
 
 def rebase_order(base_branches: dict[StrBranchName, StrShaRef]) -> list[StrBranchName]:
   """
@@ -531,8 +520,10 @@ def rebase_order(base_branches: dict[StrBranchName, StrShaRef]) -> list[StrBranc
 
   return ret
 
-def rebase_order_for(branch: StrBranchName,
-                     base_branches: dict[StrBranchName, StrShaRef]) -> list[StrBranchName]:
+
+def rebase_order_for(
+  branch: StrBranchName, base_branches: dict[StrBranchName, StrShaRef]
+) -> list[StrBranchName]:
   """
   Recursively determines the rebase order for a given branch.
 
@@ -551,9 +542,10 @@ def rebase_order_for(branch: StrBranchName,
   else:
     return [branch]
 
+
 def base_branches_from_branches_ahead_refs(
-    branches_ahead_refs: list[tuple[StrBranchName, list[StrShaRef]]]) \
-      -> dict[StrBranchName, StrShaRef]:
+  branches_ahead_refs: list[tuple[StrBranchName, list[StrShaRef]]],
+) -> dict[StrBranchName, StrShaRef]:
   """Determines the base branch for each branch from a list of ahead refs.
 
   Args:
@@ -566,12 +558,13 @@ def base_branches_from_branches_ahead_refs(
 
   for branch, refs in branches_ahead_refs:
     for ref in reversed(refs):
-      parent_branch = re.search(r'^\s*(.*?)(?:~\d+)?\s*$', ref).group(1)
+      parent_branch = re.search(r"^\s*(.*?)(?:~\d+)?\s*$", ref).group(1)
       if parent_branch != branch:
         ret[branch] = ref
         break
 
   return ret
+
 
 def pull_request(branch: StrBranchName) -> dict | None:
   """Fetches the pull request for a given branch from the GitHub API.
@@ -593,17 +586,17 @@ def pull_request(branch: StrBranchName) -> dict | None:
   if owner is None or repo is None:
     return None
 
-  github_token = os.environ['GITHUB_TOKEN']
-  params = urlencode({
-    'head': f'{owner}:{branch}',
-    'state': 'all'
-  })
+  github_token = os.environ["GITHUB_TOKEN"]
+  params = urlencode({"head": f"{owner}:{branch}", "state": "all"})
 
-  response = requests.get(f'https://api.github.com/repos/{owner}/{repo}/pulls?{params}', headers = {
-    'Accept': 'application/vnd.github+json',
-    'Authorization': f'Bearer {github_token}',
-    'X-GitHub-Api-Version': '2022-11-28'
-  })
+  response = requests.get(
+    f"https://api.github.com/repos/{owner}/{repo}/pulls?{params}",
+    headers={
+      "Accept": "application/vnd.github+json",
+      "Authorization": f"Bearer {github_token}",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  )
 
   pull_requests = response.json()
   if len(pull_requests) > 0:
@@ -611,23 +604,25 @@ def pull_request(branch: StrBranchName) -> dict | None:
   else:
     return None
 
+
 def prompt(question: str, default: bool | None = False) -> bool | None:
-  valid = { 'yes': True, 'y': True, 'ye': True, 'no': False, 'n': False }
+  valid = {"yes": True, "y": True, "ye": True, "no": False, "n": False}
 
   while True:
-    sys.stdout.write(question + { None: ' [y/n] ', True: ' [Y/n] ', False: ' [y/N] ' }[default])
+    sys.stdout.write(question + {None: " [y/n] ", True: " [Y/n] ", False: " [y/N] "}[default])
 
     try:
       choice = input().lower().strip()
-    except KeyboardInterrupt as exception:
-      choice = 'no'
+    except KeyboardInterrupt:
+      choice = "no"
 
     if choice in valid:
       return valid[choice]
-    elif choice == '' and default is not None:
+    elif choice == "" and default is not None:
       return default
     else:
       sys.stdout.write("Please respond with 'yes' or 'no' (or 'y' or 'n').\n")
+
 
 if __name__ == "__main__":
   raise SystemExit(main())
