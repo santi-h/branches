@@ -1,0 +1,9 @@
+[tool.ruff]
+line-length = 100
+indent-width = 2
+
+[tool.ruff.lint]
+extend-select = [
+  "E501", # https://docs.astral.sh/ruff/rules/line-too-long
+  "Q000"  # https://docs.astral.sh/ruff/rules/bad-quotes-inline-string/
+]

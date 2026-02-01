@@ -125,14 +125,14 @@ pip-sync requirements-dev.txt
 To upgrade all dependencies:
 
 ```shell
-pip-compile --output-file=requirements.txt requirements.in --upgrade
+pip-compile --output-file=requirements.txt requirements.in --upgrade &&
 pip-compile --output-file=requirements-dev.txt requirements-dev.in --upgrade
 ```
 
 When adding/removing dependencies to the `.in` files:
 
 ```shell
-pip-compile --output-file=requirements.txt requirements.in
+pip-compile --output-file=requirements.txt requirements.in &&
 pip-compile --output-file=requirements-dev.txt requirements-dev.in
 ```
 

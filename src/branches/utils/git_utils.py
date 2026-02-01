@@ -2,8 +2,9 @@ import os
 import git
 import re
 
+
 class GitUtils:
-  def __init__(self, repo_path = os.getcwd()):
+  def __init__(self, repo_path=os.getcwd()):
     while True:
       try:
         self._repo = git.Repo(repo_path)
@@ -25,8 +26,8 @@ class GitUtils:
     if self._owner_name and self._repo_name:
       return self._owner_name, self._repo_name
 
-    remotes = self._cmd.execute(['git', 'remote', '-v'])
-    match = re.search(r'github\.com(?::|\/)([\w\-]+)\/([\w\-]+)\.git \(fetch\)', remotes)
+    remotes = self._cmd.execute(["git", "remote", "-v"])
+    match = re.search(r"github\.com(?::|\/)([\w\-]+)\/([\w\-]+)\.git \(fetch\)", remotes)
     if match is not None:
       self._owner_name = match.group(1)
       self._repo_name = match.group(2)
@@ -45,15 +46,17 @@ class GitUtils:
     return self._current_branch
 
   def branches(self) -> list[str]:
-    branches = self._cmd.execute([
-      "git",
-      "for-each-ref",
-      "--sort=refname",
-      "--sort=-authordate",
-      "--format=%(refname:short)",
-      "refs/heads/",
-    ]).split('\n')
-    return [branch.replace('*', '').strip() for branch in branches if branch]
+    branches = self._cmd.execute(
+      [
+        "git",
+        "for-each-ref",
+        "--sort=refname",
+        "--sort=-authordate",
+        "--format=%(refname:short)",
+        "refs/heads/",
+      ]
+    ).split("\n")
+    return [branch.replace("*", "").strip() for branch in branches if branch]
 
   def local_sha(self, branch):
     return str(self.local_commit_from_branch(branch))
@@ -65,8 +68,8 @@ class GitUtils:
     ret = None
 
     try:
-     ret = self._repo.commit(sha)
-    except ValueError as exception:
+      ret = self._repo.commit(sha)
+    except ValueError:
       # Sha doesn't exist locally. Ignore and return None
       pass
 
@@ -80,21 +83,23 @@ class GitUtils:
     ret = {}
 
     try:
-      ls_remote_output = self._cmd.execute(['git', 'ls-remote', 'origin', *branches])
-    except git.exc.GitCommandError as exception:
+      ls_remote_output = self._cmd.execute(["git", "ls-remote", "origin", *branches])
+    except git.exc.GitCommandError:
       # origin doesn't exist
       return {}
 
-    for line in ls_remote_output.split('\n'):
-      result = re.search(r'^(\w+)\s+refs\/heads\/(.*)$', line)
+    for line in ls_remote_output.split("\n"):
+      result = re.search(r"^(\w+)\s+refs\/heads\/(.*)$", line)
       if result is not None:
         ret[result.group(2)] = result.group(1)
 
     return ret
 
   def distance(self, branch_from, branch_to) -> tuple[int, int]:
-    result = self._cmd.execute(['git', 'rev-list', '--left-right', '--count', f'{branch_from}...{branch_to}'])
-    result = re.split(r'\s+', result.strip())
+    result = self._cmd.execute(
+      ["git", "rev-list", "--left-right", "--count", f"{branch_from}...{branch_to}"]
+    )
+    result = re.split(r"\s+", result.strip())
     return (int(result[0]), int(result[1]))
 
   def parent_shas_of_ref(self, ref: str, n: int = 1) -> list[list[str]]:
@@ -106,34 +111,36 @@ class GitUtils:
     """
     ret = []
 
-    command = ['git', 'rev-list', '--parents', f'-n{n}', ref, '--']
-    for line in self._cmd.execute(command).split('\n'):
-      ret.append(re.split(r'\s+', line.strip()))
+    command = ["git", "rev-list", "--parents", f"-n{n}", ref, "--"]
+    for line in self._cmd.execute(command).split("\n"):
+      ret.append(re.split(r"\s+", line.strip()))
 
     return ret
 
   def main_branch(self):
     try:
-      origin_ref = self._repo.refs['origin/HEAD']
+      origin_ref = self._repo.refs["origin/HEAD"]
     except IndexError as exception:
-      for branch in ['main', 'release', 'master']:
+      for branch in ["main", "release", "master"]:
         if branch in self._repo.branches:
           return branch
 
       raise exception
 
     origin_head = origin_ref.reference.name
-    return re.search(r'\/([^\/]+?)\s*$', origin_head).group(1)
+    return re.search(r"\/([^\/]+?)\s*$", origin_head).group(1)
 
   def shas_ahead_of(self, branch_from, branch_to) -> list[str]:
-    result = self._cmd.execute(['git', 'log', f'{branch_from}..{branch_to}', '--format=%H', '--reverse'])
-    return [sha for sha in re.split(r'\s+', result.strip()) if sha.strip()]
+    result = self._cmd.execute(
+      ["git", "log", f"{branch_from}..{branch_to}", "--format=%H", "--reverse"]
+    )
+    return [sha for sha in re.split(r"\s+", result.strip()) if sha.strip()]
 
   def current_user_email(self) -> str:
-    return self._cmd.execute(['git', 'config', 'user.email']).strip()
+    return self._cmd.execute(["git", "config", "user.email"]).strip()
 
   def commit_author_email(self, sha):
-    return self._cmd.execute(['git', 'show', '--format=%ae', '--no-patch', sha]).strip()
+    return self._cmd.execute(["git", "show", "--format=%ae", "--no-patch", sha]).strip()
 
   def date_authored(self, sha):
     return self.local_commit_from_sha(sha).authored_datetime
