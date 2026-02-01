@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import re
 import copy
 from typing import TypeAlias
+import os
 
 # Using some TypeAliases just for readability / documentation
 StrBranchName: TypeAlias = str
@@ -115,7 +116,7 @@ def branches(args: argparse.Namespace) -> int:
     print('')
     print(' && \\\n'.join(update_commands))
     print('')
-    if prompt('Run update command?'):
+    if 'PYTEST_CURRENT_TEST' not in os.environ and prompt('Run update command?'):
       ret = subprocess.run(' && '.join(update_commands), shell=True).returncode
 
   return ret

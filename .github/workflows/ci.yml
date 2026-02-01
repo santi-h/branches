@@ -29,5 +29,11 @@ jobs:
           pip install -U pip-tools
           pip-sync requirements-dev.txt
 
+      - name: Set up git config attributes
+        run: |
+          git config --global user.email "first.last@example.com"
+          git config --global user.name "First Last"
+          git config --global init.defaultBranch main
+
       - name: Run unit tests
         run: pytest -vv
