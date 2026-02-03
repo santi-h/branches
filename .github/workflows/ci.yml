@@ -32,6 +32,7 @@ jobs:
       - name: Run ruff
         run: |
           python -m ruff check .
+          python -m ruff format --check .
 
       - name: Set up git config attributes
         run: |
