@@ -5,7 +5,9 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from subprocess import CompletedProcess
 import re
+from datetime import datetime, timezone, timedelta
 
 GIT_TMP_DIRPATH = os.path.join(os.path.dirname(__file__), "test_cli")
 SRC_DIRPATH = os.path.join(Path(__file__).resolve().parents[2], "src")
@@ -19,6 +21,12 @@ def around_each():
   shutil.rmtree(GIT_TMP_DIRPATH, ignore_errors=True)
 
 
+def run_command(command: str) -> CompletedProcess[str]:
+  return subprocess.run(
+    f"cd '{GIT_TMP_DIRPATH}' && {command}", shell=True, capture_output=True, text=True
+  )
+
+
 def run_test(
   prep_command: str | None,
   trigger_command: str,
@@ -27,10 +35,10 @@ def run_test(
   cleanup_command: str | None = None,
 ):
   if len(prep_command or "") > 0:
-    subprocess.run(f"cd '{GIT_TMP_DIRPATH}' && {prep_command}", shell=True)
+    run_command(prep_command)
 
   result = subprocess.run(
-    f"cd '{GIT_TMP_DIRPATH}' && PYTHONPATH='{SRC_DIRPATH}' {trigger_command}",
+    f"cd '{GIT_TMP_DIRPATH}' && PYTHONPATH='{SRC_DIRPATH}' python -m {trigger_command}",
     shell=True,
     capture_output=True,
     text=True,
@@ -78,46 +86,64 @@ def test_cli():
   #             \       P  <- branch8
   #              \
   #               Q        <- branch9
-  prep_command = " && ".join(
-    [
-      "git init",
-      "echo 'A.txt' > A.txt && git add . && git commit -m 'A' --date='2026-01-31T18:13:29-0500'",
-      "echo 'B.txt' > B.txt && git add . && git commit -m 'B' --date='2026-01-31T18:13:30-0500'",
-      "git checkout -b branch1",
-      "echo 'C.txt' > C.txt && git add . && git commit -m 'C' --date='2026-01-31T18:13:31-0500'",
-      "git checkout -b branch2",
-      "echo 'D.txt' > D.txt && git add . && git commit -m 'D' --date='2026-01-31T18:13:32-0500'",
-      "echo 'E.txt' > E.txt && git add . && git commit -m 'E' --date='2026-01-31T18:13:33-0500'",
-      "git checkout -b branch3",
-      "echo 'F.txt' > F.txt && git add . && git commit -m 'F' --date='2026-01-31T18:13:34-0500'",
-      "git checkout -b branch4",
-      "git checkout -b branch6",
-      "echo 'G.txt' > G.txt && git add . && git commit -m 'G' --date='2026-01-31T18:13:35-0500'",
-      "git checkout branch3",
-      "git checkout -b branch5",
-      "echo 'H.txt' > H.txt && git add . && git commit -m 'H' --date='2026-01-31T18:13:36-0500'",
-      "echo 'I.txt' > I.txt && git add . && git commit -m 'I' --date='2026-01-31T18:13:37-0500'",
-      "git checkout branch1",
-      "echo 'J.txt' > J.txt && git add . && git commit -m 'J' --date='2026-01-31T18:13:38-0500'",
-      "git checkout -b branch10",
-      "git checkout main",
-      "echo 'K.txt' > K.txt && git add . && git commit -m 'K' --date='2026-01-31T18:13:39-0500'",
-      "echo 'L.txt' > L.txt && git add . && git commit -m 'L' --date='2026-01-31T18:13:40-0500'",
-      "echo 'M.txt' > M.txt && git add . && git commit -m 'M' --date='2026-01-31T18:13:41-0500'",
-      "git checkout -b branch7",
-      "echo 'O.txt' > O.txt && git add . && git commit -m 'O' --date='2026-01-31T18:13:42-0500'",
-      "git checkout -b branch8",
-      "echo 'P.txt' > P.txt && git add . && git commit -m 'P' --date='2026-01-31T18:13:43-0500'",
-      "git checkout main~2",
-      "git checkout -b branch9",
-      "echo 'Q.txt' > Q.txt && git add . && git commit -m 'Q' --date='2026-01-31T18:13:44-0500'",
-      "git checkout main",
-    ]
-  )
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+  tformat = "%Y-%m-%dT%H:%M:%S%z"
 
   run_test(
-    prep_command,
-    "python -m branches",
+    " && ".join(
+      [
+        "git init",
+        "echo 'A.txt' > A.txt && git add .",
+        f"git commit -m 'A' --date='{(now + sec * 1).strftime(tformat)}'",
+        "echo 'B.txt' > B.txt && git add .",
+        f"git commit -m 'B' --date='{(now + sec * 2).strftime(tformat)}'",
+        "git checkout -b branch1",
+        "echo 'C.txt' > C.txt && git add .",
+        f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}'",
+        "git checkout -b branch2",
+        "echo 'D.txt' > D.txt && git add .",
+        f"git commit -m 'D' --date='{(now + sec * 4).strftime(tformat)}'",
+        "echo 'E.txt' > E.txt && git add .",
+        f"git commit -m 'E' --date='{(now + sec * 5).strftime(tformat)}'",
+        "git checkout -b branch3",
+        "echo 'F.txt' > F.txt && git add .",
+        f"git commit -m 'F' --date='{(now + sec * 6).strftime(tformat)}'",
+        "git checkout -b branch4",
+        "git checkout -b branch6",
+        "echo 'G.txt' > G.txt && git add .",
+        f"git commit -m 'G' --date='{(now + sec * 7).strftime(tformat)}'",
+        "git checkout branch3",
+        "git checkout -b branch5",
+        "echo 'H.txt' > H.txt && git add .",
+        f"git commit -m 'H' --date='{(now + sec * 8).strftime(tformat)}'",
+        "echo 'I.txt' > I.txt && git add .",
+        f"git commit -m 'I' --date='{(now + sec * 9).strftime(tformat)}'",
+        "git checkout branch1",
+        "echo 'J.txt' > J.txt && git add .",
+        f"git commit -m 'J' --date='{(now + sec * 10).strftime(tformat)}'",
+        "git checkout -b branch10",
+        "git checkout main",
+        "echo 'K.txt' > K.txt && git add .",
+        f"git commit -m 'K' --date='{(now + sec * 11).strftime(tformat)}'",
+        "echo 'L.txt' > L.txt && git add .",
+        f"git commit -m 'L' --date='{(now + sec * 12).strftime(tformat)}'",
+        "echo 'M.txt' > M.txt && git add .",
+        f"git commit -m 'M' --date='{(now + sec * 13).strftime(tformat)}'",
+        "git checkout -b branch7",
+        "echo 'O.txt' > O.txt && git add .",
+        f"git commit -m 'O' --date='{(now + sec * 14).strftime(tformat)}'",
+        "git checkout -b branch8",
+        "echo 'P.txt' > P.txt && git add .",
+        f"git commit -m 'P' --date='{(now + sec * 15).strftime(tformat)}'",
+        "git checkout main~2",
+        "git checkout -b branch9",
+        "echo 'Q.txt' > Q.txt && git add .",
+        f"git commit -m 'Q' --date='{(now + sec * 16).strftime(tformat)}'",
+        "git checkout main",
+      ]
+    ),
+    "branches",
     [
       r"                                                               ",
       r"  Origin   Local    Age   <-   ->   Branch     Base        PR  ",
@@ -149,7 +175,7 @@ def test_cli():
 
   run_test(
     None,
-    "python -m branches -s",
+    "branches -s",
     [
       r"                                                        ",
       r"  Origin   Local    Age   <-   ->   Branch   Base   PR  ",
@@ -161,7 +187,7 @@ def test_cli():
 
   run_test(
     "git checkout branch2",
-    "python -m branches -s",
+    "branches -s",
     [
       r"                                                               ",
       r"  Origin   Local    Age   <-   ->   Branch     Base        PR  ",
@@ -189,7 +215,7 @@ def test_cli():
 
   run_test(
     "git checkout branch1",
-    "python -m branches -s",
+    "branches -s",
     [
       r"                                                               ",
       r"  Origin   Local    Age   <-   ->   Branch     Base        PR  ",
@@ -217,7 +243,7 @@ def test_cli():
 
   run_test(
     "git checkout branch10",
-    "python -m branches -s",
+    "branches -s",
     [
       r"                                                               ",
       r"  Origin   Local    Age   <-   ->   Branch     Base        PR  ",
@@ -245,7 +271,7 @@ def test_cli():
 
   run_test(
     "git checkout branch9",
-    "python -m branches -s",
+    "branches -s",
     [
       r"                                                         ",
       r"  Origin   Local    Age   <-   ->   Branch    Base   PR  ",
