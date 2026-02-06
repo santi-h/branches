@@ -9,22 +9,25 @@ from subprocess import CompletedProcess
 import re
 from datetime import datetime, timezone, timedelta
 
-GIT_TMP_DIRPATH = os.path.join(os.path.dirname(__file__), "test_cli")
+GIT_TMP_DIRPATH_LOCAL = os.path.join(os.path.dirname(__file__), "test_cli_local")
+GIT_TMP_DIRPATH_ORIGIN = os.path.join(os.path.dirname(__file__), "test_cli_origin")
 SRC_DIRPATH = os.path.join(Path(__file__).resolve().parents[2], "src")
 
 
 @pytest.fixture(autouse=True)
 def around_each():
-  shutil.rmtree(GIT_TMP_DIRPATH, ignore_errors=True)
-  os.makedirs(GIT_TMP_DIRPATH)
+  shutil.rmtree(GIT_TMP_DIRPATH_ORIGIN, ignore_errors=True)
+  shutil.rmtree(GIT_TMP_DIRPATH_LOCAL, ignore_errors=True)
+  os.makedirs(GIT_TMP_DIRPATH_ORIGIN)
+  os.makedirs(GIT_TMP_DIRPATH_LOCAL)
+  run_command("git init --bare .", GIT_TMP_DIRPATH_ORIGIN)
   yield
-  shutil.rmtree(GIT_TMP_DIRPATH, ignore_errors=True)
+  shutil.rmtree(GIT_TMP_DIRPATH_LOCAL, ignore_errors=True)
+  shutil.rmtree(GIT_TMP_DIRPATH_ORIGIN, ignore_errors=True)
 
 
-def run_command(command: str) -> CompletedProcess[str]:
-  return subprocess.run(
-    f"cd '{GIT_TMP_DIRPATH}' && {command}", shell=True, capture_output=True, text=True
-  )
+def run_command(command: str, dirpath: str = GIT_TMP_DIRPATH_LOCAL) -> CompletedProcess[str]:
+  return subprocess.run(f"cd '{dirpath}' && {command}", shell=True, capture_output=True, text=True)
 
 
 def run_test(
@@ -35,10 +38,13 @@ def run_test(
   cleanup_command: str | None = None,
 ):
   if len(prep_command or "") > 0:
-    run_command(prep_command)
+    result = run_command(prep_command)
+    assert result.returncode == 0, (
+      f"Prep command output:\n{result.stdout}\nPrep command stderr:\n{result.stderr}"
+    )
 
   result = subprocess.run(
-    f"cd '{GIT_TMP_DIRPATH}' && PYTHONPATH='{SRC_DIRPATH}' python -m {trigger_command}",
+    f"cd '{GIT_TMP_DIRPATH_LOCAL}' && PYTHONPATH='{SRC_DIRPATH}' python -m {trigger_command}",
     shell=True,
     capture_output=True,
     text=True,
@@ -65,7 +71,7 @@ def run_test(
     )
 
   if len(cleanup_command or "") > 0:
-    subprocess.run(f"cd '{GIT_TMP_DIRPATH}' && {cleanup_command}", shell=True)
+    subprocess.run(f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {cleanup_command}", shell=True)
 
 
 def test_cli():
@@ -93,14 +99,14 @@ def test_cli():
   run_test(
     " && ".join(
       [
-        "git init",
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
         "echo 'A.txt' > A.txt && git add .",
         f"git commit -m 'A' --date='{(now + sec * 1).strftime(tformat)}'",
         "echo 'B.txt' > B.txt && git add .",
         f"git commit -m 'B' --date='{(now + sec * 2).strftime(tformat)}'",
         "git checkout -b branch1",
         "echo 'C.txt' > C.txt && git add .",
-        f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}'",
+        f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}' && git push",
         "git checkout -b branch2",
         "echo 'D.txt' > D.txt && git add .",
         f"git commit -m 'D' --date='{(now + sec * 4).strftime(tformat)}'",
@@ -108,7 +114,7 @@ def test_cli():
         f"git commit -m 'E' --date='{(now + sec * 5).strftime(tformat)}'",
         "git checkout -b branch3",
         "echo 'F.txt' > F.txt && git add .",
-        f"git commit -m 'F' --date='{(now + sec * 6).strftime(tformat)}'",
+        f"git commit -m 'F' --date='{(now + sec * 6).strftime(tformat)}' && git push",
         "git checkout -b branch4",
         "git checkout -b branch6",
         "echo 'G.txt' > G.txt && git add .",
@@ -152,18 +158,18 @@ def test_cli():
       r"           \w{5}      0    2   1    branch9                    ",
       r"           \w{5}      0    0   2    branch8    branch7         ",
       r"           \w{5}      0    0   1    branch7                    ",
-      r"           \w{5}      0    3   2    branch1                    ",
+      r"   \w{5}   \w{5}      0    3   2    branch1                    ",
       r"           \w{5}      0    3   2    branch10   branch1         ",
       r"           \w{5}      0    3   6    branch5    branch3         ",
       r"           \w{5}      0    3   5    branch6    branch3         ",
-      r"           \w{5}      0    3   4    branch3    branch2         ",
+      r"   \w{5}   \w{5}      0    3   4    branch3    branch2         ",
       r"           \w{5}      0    3   4    branch4    branch3         ",
       r"           \w{5}      0    3   3    branch2    branch1~1       ",
       r"                                                               ",
       r"git checkout branch1 && git rebase main && \\",
       r"git checkout branch10 && git rebase branch1 && \\",
       r"git checkout branch2 && git rebase branch1~1 && \\",
-      r"git checkout branch3 && git rebase branch2 && \\",
+      r"git checkout branch3 && git rebase branch2 && git push -f && \\",
       r"git checkout branch4 && git rebase branch3 && \\",
       r"git checkout branch6 && git rebase branch3 && \\",
       r"git checkout branch5 && git rebase branch3 && \\",
@@ -194,8 +200,8 @@ def test_cli():
       r" ───────────────────────────────────────────────────────────── ",
       r"           \w{5}      0    0   0    main                       ",
       r"           \w{5}      0    3   3    branch2    branch1~1       ",
-      r"           \w{5}      0    3   2    branch1                    ",
-      r"           \w{5}      0    3   4    branch3    branch2         ",
+      r"   \w{5}   \w{5}      0    3   2    branch1                    ",
+      r"   \w{5}   \w{5}      0    3   4    branch3    branch2         ",
       r"           \w{5}      0    3   4    branch4    branch3         ",
       r"           \w{5}      0    3   5    branch6    branch3         ",
       r"           \w{5}      0    3   6    branch5    branch3         ",
@@ -204,7 +210,7 @@ def test_cli():
       r"git checkout branch1 && git rebase main && \\",
       r"git checkout branch10 && git rebase branch1 && \\",
       r"git checkout branch2 && git rebase branch1~1 && \\",
-      r"git checkout branch3 && git rebase branch2 && \\",
+      r"git checkout branch3 && git rebase branch2 && git push -f && \\",
       r"git checkout branch4 && git rebase branch3 && \\",
       r"git checkout branch6 && git rebase branch3 && \\",
       r"git checkout branch5 && git rebase branch3 && \\",
@@ -221,10 +227,10 @@ def test_cli():
       r"  Origin   Local    Age   <-   ->   Branch     Base        PR  ",
       r" ───────────────────────────────────────────────────────────── ",
       r"           \w{5}      0    0   0    main                       ",
-      r"           \w{5}      0    3   2    branch1                    ",
+      r"   \w{5}   \w{5}      0    3   2    branch1                    ",
       r"           \w{5}      0    3   2    branch10   branch1         ",
       r"           \w{5}      0    3   3    branch2    branch1~1       ",
-      r"           \w{5}      0    3   4    branch3    branch2         ",
+      r"   \w{5}   \w{5}      0    3   4    branch3    branch2         ",
       r"           \w{5}      0    3   4    branch4    branch3         ",
       r"           \w{5}      0    3   5    branch6    branch3         ",
       r"           \w{5}      0    3   6    branch5    branch3         ",
@@ -232,7 +238,7 @@ def test_cli():
       r"git checkout branch1 && git rebase main && \\",
       r"git checkout branch10 && git rebase branch1 && \\",
       r"git checkout branch2 && git rebase branch1~1 && \\",
-      r"git checkout branch3 && git rebase branch2 && \\",
+      r"git checkout branch3 && git rebase branch2 && git push -f && \\",
       r"git checkout branch4 && git rebase branch3 && \\",
       r"git checkout branch6 && git rebase branch3 && \\",
       r"git checkout branch5 && git rebase branch3 && \\",
@@ -250,9 +256,9 @@ def test_cli():
       r" ───────────────────────────────────────────────────────────── ",
       r"           \w{5}      0    0   0    main                       ",
       r"           \w{5}      0    3   2    branch10   branch1         ",
-      r"           \w{5}      0    3   2    branch1                    ",
+      r"   \w{5}   \w{5}      0    3   2    branch1                    ",
       r"           \w{5}      0    3   3    branch2    branch1~1       ",
-      r"           \w{5}      0    3   4    branch3    branch2         ",
+      r"   \w{5}   \w{5}      0    3   4    branch3    branch2         ",
       r"           \w{5}      0    3   4    branch4    branch3         ",
       r"           \w{5}      0    3   5    branch6    branch3         ",
       r"           \w{5}      0    3   6    branch5    branch3         ",
@@ -260,7 +266,7 @@ def test_cli():
       r"git checkout branch1 && git rebase main && \\",
       r"git checkout branch10 && git rebase branch1 && \\",
       r"git checkout branch2 && git rebase branch1~1 && \\",
-      r"git checkout branch3 && git rebase branch2 && \\",
+      r"git checkout branch3 && git rebase branch2 && git push -f && \\",
       r"git checkout branch4 && git rebase branch3 && \\",
       r"git checkout branch6 && git rebase branch3 && \\",
       r"git checkout branch5 && git rebase branch3 && \\",
