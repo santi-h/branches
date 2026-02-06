@@ -1,9 +1,0 @@
-                                                         
-  Origin   Local    Age   <-   ->   Branch    Base   PR  
- ─────────────────────────────────────────────────────── 
-           a8959      0    0   0    main                 
-           e5d9a      0    2   1    branch9              
-                                                         
-git checkout branch9 && git rebase main && \
-git checkout main
-

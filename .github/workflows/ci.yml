@@ -32,12 +32,14 @@ jobs:
       - name: Run ruff
         run: |
           python -m ruff check .
+          python -m ruff format --check .
 
       - name: Set up git config attributes
         run: |
           git config --global user.email "first.last@example.com"
           git config --global user.name "First Last"
           git config --global init.defaultBranch main
+          git config --global push.autoSetupRemote true
 
       - name: Run unit tests
         run: pytest -vv

@@ -3,4 +3,6 @@ __pycache__/
 /dist/
 /build/
 /.envrc
-/tests/branches/test_cli/
+/tests/branches/test_cli_local/
+/tests/branches/test_cli_origin/
+/tests/branches/test_cli_result.txt
