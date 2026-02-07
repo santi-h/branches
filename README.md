@@ -330,6 +330,26 @@ pyenv virtualenv `cat .python-version` branches &&
 pip install -U pip-tools
 ```
 
+## Development: upgrade python and dependencies
+
+```shell
+NEW_PYTHON_VERSION=3.14.3
+OLD_PYTHON_VERSION=$(cat .python-version)
+
+pyenv virtualenv-delete -f branches &&
+pyenv install $NEW_PYTHON_VERSION &&
+echo $NEW_PYTHON_VERSION > .python-version &&
+pyenv virtualenv `cat .python-version` branches &&
+pip install -U pip-tools &&
+pip-compile --output-file=requirements.txt requirements.in --upgrade &&
+pip-compile --output-file=requirements-dev.txt requirements-dev.in --upgrade &&
+pip-sync requirements-dev.txt &&
+git add . && git commit -m "Upgrade python \`$OLD_PYTHON_VERSION\` -> \`$NEW_PYTHON_VERSION\` and dependencies" &&
+echo "-------------------------------------------------------------" &&
+echo "Remember to update .github/workflows/ci.yml" &&
+echo "Remember to update https://github.com/santi-h/branches/settings/rules/11918879"
+```
+
 ## Development: running tests
 
 To run all tests:
