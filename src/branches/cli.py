@@ -62,6 +62,10 @@ COLUMNS = {
 PR_STATUS_COLORS = {"open": "green", "closed": "red", "merged": "medium_purple1"}
 
 
+class GitHubApiError(Exception):
+  pass
+
+
 def main() -> int:
   """Entry point for the CLI."""
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -81,7 +85,13 @@ def main() -> int:
     "-s", "--short", action="store_true", default=False, help="Show a short list only"
   )
 
-  return branches(parser.parse_args())
+  ret = 1
+  try:
+    ret = branches(parser.parse_args())
+  except KeyboardInterrupt:
+    print("Interrupted")
+
+  return ret
 
 
 def branches(args: argparse.Namespace) -> int:
@@ -245,6 +255,10 @@ def table_row(
     if show_warnings:
       print("WARNING: there is internet connection issues.")
       print("Network dependent functionality will not work.")
+  except GitHubApiError as exception:
+    pr = None
+    if show_warnings:
+      print(f"WARNING: {exception}")
 
   if pr is not None and branch != ret["main_branch"]:
     if pr.get("state") == "open":
@@ -645,6 +659,9 @@ def pull_request(branch: StrBranchName) -> dict | None:
       "X-GitHub-Api-Version": "2022-11-28",
     },
   )
+
+  if response.status_code != 200:
+    raise GitHubApiError(f"GitHub returned a {response.status_code}")
 
   pull_requests = response.json()
   if len(pull_requests) > 0:
