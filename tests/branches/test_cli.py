@@ -74,7 +74,7 @@ def run_test(
     subprocess.run(f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {cleanup_command}", shell=True)
 
 
-def test_cli():
+def test_cli_misc():
   #                 G      <- branch6
   #                /
   #               | H---I  <- branch5
@@ -220,6 +220,33 @@ def test_cli():
   )
 
   run_test(
+    "git checkout branch2 && echo test >> E.txt && git add E.txt",
+    "branches amend",
+    [
+      r"                                                               ",
+      r"  Origin   Local    Age   <-   ->   Branch     Base        PR  ",
+      r" ───────────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                       ",
+      r"           \w{5}      0    3   3    branch2    branch1~1       ",
+      r"   \w{5}   \w{5}      0    3   2    branch1                    ",
+      r"   \w{5}   \w{5}      0    3   4    branch3    branch2         ",
+      r"           \w{5}      0    3   4    branch4    branch3         ",
+      r"           \w{5}      0    3   5    branch6    branch3         ",
+      r"           \w{5}      0    3   6    branch5    branch3         ",
+      r"           \w{5}      0    3   2    branch10   branch1         ",
+      r"                                                               ",
+      r"git add . && git commit --amend --no-edit && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout branch4 && git reset --hard branch3 && \\",
+      r"git checkout branch6 && git rebase --onto branch3 branch6~1 && \\",
+      r"git checkout branch5 && git rebase --onto branch3 branch5~2 && \\",
+      r"git checkout branch2",
+      r"",
+    ],
+    cleanup_command="git reset HEAD && git checkout .",
+  )
+
+  run_test(
     "git checkout branch1",
     "branches -s",
     [
@@ -245,6 +272,30 @@ def test_cli():
       r"git checkout main",
       r"",
     ],
+  )
+
+  run_test(
+    "git checkout branch1 && echo test >> J.txt && git add J.txt",
+    "branches amend",
+    [
+      r"                                                               ",
+      r"  Origin   Local    Age   <-   ->   Branch     Base        PR  ",
+      r" ───────────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                       ",
+      r"   \w{5}   \w{5}      0    3   2    branch1                    ",
+      r"           \w{5}      0    3   2    branch10   branch1         ",
+      r"           \w{5}      0    3   3    branch2    branch1~1       ",
+      r"   \w{5}   \w{5}      0    3   4    branch3    branch2         ",
+      r"           \w{5}      0    3   4    branch4    branch3         ",
+      r"           \w{5}      0    3   5    branch6    branch3         ",
+      r"           \w{5}      0    3   6    branch5    branch3         ",
+      r"                                                               ",
+      r"git add . && git commit --amend --no-edit && \\",
+      r"git checkout branch10 && git reset --hard branch1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+    cleanup_command="git reset HEAD && git checkout .",
   )
 
   run_test(
@@ -292,7 +343,55 @@ def test_cli():
   )
 
   run_test(
-    "git checkout main",
+    "git checkout branch9 && echo test >> Q.txt && git add Q.txt",
+    "branches amend",
+    [
+      r"                                                         ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base   PR  ",
+      r" ─────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                 ",
+      r"           \w{5}      0    2   1    branch9              ",
+      r"                                                         ",
+      r"git add . && git commit --amend --no-edit",
+      r"",
+    ],
+    cleanup_command="git reset HEAD && git checkout .",
+  )
+
+  run_test(
+    "git checkout branch9",
+    "branches amend",
+    [
+      r"                                                         ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base   PR  ",
+      r" ─────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                 ",
+      r"           \w{5}      0    2   1    branch9              ",
+      r"                                                         ",
+      r"No changes to amend with.",
+      r"",
+    ],
+    expected_returncode=1,
+  )
+
+  run_test(
+    "git checkout main && echo test >> A.txt && git add A.txt",
+    "branches amend",
+    [
+      r"                                                        ",
+      r"  Origin   Local    Age   <-   ->   Branch   Base   PR  ",
+      r" ────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                ",
+      r"                                                        ",
+      r"Cannot run amend on the main branch. Checkout a different branch.",
+      r"",
+    ],
+    expected_returncode=1,
+    cleanup_command="git reset HEAD && git checkout .",
+  )
+
+  run_test(
+    "git reset HEAD && git checkout . && git checkout main",
     "branches -y",
     [
       r"                                                               ",
@@ -373,5 +472,293 @@ def test_cli():
       r"           \w{5}      0    0   4    branch4    branch3         ",
       r"           \w{5}      0    0   3    branch2    branch1~1       ",
       r"                                                               ",
+    ],
+  )
+
+
+def test_cli_amend():
+  #     C---D <- branch2
+  #    /
+  #   B       <- branch1
+  #  /
+  # A         <- main
+  file_content_a = "\\n".join(
+    [
+      "line1",
+      "",
+      "",
+      "line4",
+      "",
+      "line3 - original from main",
+      "",
+      "line7",
+      "",
+      "",
+      "",
+      "line8 last one",
+    ]
+  )
+
+  file_content_b = "\\n".join(
+    [
+      "line1",
+      "",
+      "",
+      "line4 - changed by branch1",
+      "",
+      "line3 - original from main",
+      "",
+      "line7",
+      "",
+      "",
+      "",
+      "line8 last one",
+    ]
+  )
+
+  file_content_c = "\\n".join(
+    [
+      "line1 - changed by branch2",
+      "",
+      "",
+      "line4 - changed by branch1",
+      "",
+      "line3 - original from main",
+      "",
+      "line7",
+      "",
+      "",
+      "",
+      "line8 last one",
+    ]
+  )
+
+  file_content_d = "\\n".join(
+    [
+      "line1 - changed by branch2 - changed again at D",
+      "changed at commit D",
+      "",
+      "line4 - changed by branch1",
+      "",
+      "line3 - original from main",
+      "",
+      "line7",
+      "",
+      "",
+      "",
+      "line8 last one",
+    ]
+  )
+
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+  tformat = "%Y-%m-%dT%H:%M:%S%z"
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        f'echo "{file_content_a}" > testfile.txt && git add .',
+        f"git commit -m 'A' --date='{(now + sec * 1).strftime(tformat)}'",
+        "git checkout -b branch1",
+        f'echo "{file_content_b}" > testfile.txt && git add .',
+        f"git commit -m 'B' --date='{(now + sec * 2).strftime(tformat)}'",
+        "git checkout -b branch2",
+        f'echo "{file_content_c}" > testfile.txt && git add .',
+        f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}'",
+        f'echo "{file_content_d}" > testfile.txt && git add .',
+        f"git commit -m 'D' --date='{(now + sec * 3).strftime(tformat)}'",
+        "git checkout branch1",
+      ]
+    ),
+    "branches amend",
+    [
+      r"                                                            ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base      PR  ",
+      r" ────────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                    ",
+      r"           \w{5}      0    0   1    branch1                 ",
+      r"           \w{5}      0    0   3    branch2   branch1       ",
+      r"                                                            ",
+      r"No changes to amend with.",
+      r"",
+    ],
+    expected_returncode=1,
+  )
+
+  file_content_b_new = "\\n".join(
+    [
+      "line1",
+      "",
+      "",
+      "line4",
+      "",
+      "line3 - original from main",
+      "",
+      "line7",
+      "",
+      "",
+      "changed by branch1",
+      "line8 last one",
+    ]
+  )
+
+  run_test(
+    f'echo "{file_content_b_new}" > testfile.txt',
+    "branches amend -y",
+    [
+      r"                                                            ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base      PR  ",
+      r" ────────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                    ",
+      r"           \w{5}      0    0   1    branch1                 ",
+      r"           \w{5}      0    0   3    branch2   branch1       ",
+      r"                                                            ",
+      r"git add . && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~2 && \\",
+      r"git checkout branch1",
+      r"",
+      r"\[branch1 \w{7}\] B",
+      r" Date: .*",
+      r" 1 file changed, 1 insertion\(\+\), 1 deletion\(-\)",
+      r"Switched to branch 'branch2'",
+      r"Rebasing \(1/2\)",
+      r"Rebasing \(2/2\)",
+      r"Successfully rebased and updated refs/heads/branch2.",
+      r"Switched to branch 'branch1'",
+    ],
+  )
+
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                            ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base      PR  ",
+      r" ────────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                    ",
+      r"           \w{5}      0    0   1    branch1                 ",
+      r"           \w{5}      0    0   3    branch2   branch1       ",
+      r"                                                            ",
+    ],
+  )
+
+  assert run_command("cat testfile.txt").stdout == "\n".join(
+    [
+      "line1",
+      "",
+      "",
+      "line4",
+      "",
+      "line3 - original from main",
+      "",
+      "line7",
+      "",
+      "",
+      "changed by branch1",
+      "line8 last one",
+      "",
+    ]
+  )
+
+  assert run_command("git checkout branch2 && cat testfile.txt").stdout == "\n".join(
+    [
+      "line1 - changed by branch2 - changed again at D",
+      "changed at commit D",
+      "",
+      "line4",
+      "",
+      "line3 - original from main",
+      "",
+      "line7",
+      "",
+      "",
+      "changed by branch1",
+      "line8 last one",
+      "",
+    ]
+  )
+
+  run_test(
+    "git checkout branch1 && git push && echo 'new file' > testnewfile.txt",
+    "branches amend -y",
+    [
+      r"                                                            ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base      PR  ",
+      r" ────────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                    ",
+      r"   \w{5}   \w{5}      0    0   1    branch1                 ",
+      r"           \w{5}      0    0   3    branch2   branch1       ",
+      r"                                                            ",
+      r"git add . && git commit --amend --no-edit && git push -f && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~2 && \\",
+      r"git checkout branch1",
+      r"",
+      r"\[branch1 \w{7}\] B",
+      r" Date: .*",
+      r" 2 files changed, 2 insertions\(\+\), 1 deletion\(\-\)",
+      r" create mode 100644 testnewfile.txt",
+      f"To {GIT_TMP_DIRPATH_ORIGIN}",
+      r" \+ \w{7}...\w{7} branch1 -> branch1 \(forced update\)",
+      r"Switched to branch 'branch2'",
+      r"Rebasing \(1/2\)",
+      r"Rebasing \(2/2\)",
+      r"Successfully rebased and updated refs/heads/branch2.",
+      r"Switched to branch 'branch1'",
+      r"Your branch is up to date with 'origin/branch1'.",
+    ],
+  )
+
+  run_command(
+    "git checkout main && "
+    "git checkout -b branch3 && "
+    "echo 'yet another file' > yetanotherfile.txt && "
+    "git add . && git commit -m 'yet another file' && "
+    "git checkout branch2 && git merge branch3"
+  )
+
+  run_test(
+    "git checkout branch2 && git push && echo 'file5' > file5.txt",
+    "branches amend",
+    [
+      r"                                                          ",
+      r"  Origin   Local    Age   <-   ->    Branch    Base   PR  ",
+      r" ──────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0     main                 ",
+      r"   \w{5}   \w{5}      0    0   5 M   branch2              ",
+      r"                                                          ",
+      r"Tool limitation: cannot amend or update branches with merge commits.",
+    ],
+    expected_returncode=1,
+  )
+
+  run_test(
+    None,
+    "branches amend -y",
+    [
+      r"                                                          ",
+      r"  Origin   Local    Age   <-   ->    Branch    Base   PR  ",
+      r" ──────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0     main                 ",
+      r"   \w{5}   \w{5}      0    0   5 M   branch2              ",
+      r"                                                          ",
+      r"Tool limitation: cannot amend or update branches with merge commits.",
+    ],
+    expected_returncode=1,
+    cleanup_command="git clean -fd",
+  )
+
+  run_test(
+    "git checkout branch1 && git push && echo 'file5' > file5.txt",
+    "branches amend",
+    [
+      r"                                                         ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base   PR  ",
+      r" ─────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                 ",
+      r"   \w{5}   \w{5}      0    0   1    branch1              ",
+      r"                                                         ",
+      r"git add . && git commit --amend --no-edit && git push -f",
+      r"",
     ],
   )

@@ -4,6 +4,7 @@ from src.branches.cli import (
   rebase_order,
   base_branches_from_branches_ahead_refs,
   generate_update_commands,
+  generate_amend_commands,
 )
 
 
@@ -304,3 +305,68 @@ def test_generate_update_commands():
 
   for test_case in test_cases:
     assert generate_update_commands(**test_case[0]) == test_case[1]
+
+
+def test_generate_amend_commands():
+  test_cases = [
+    [
+      #                 P      <-  branch6
+      #                /
+      #               | N---O  <-  branch5
+      #               |/
+      #               M        <-  branch3, branch4
+      #              /
+      #         K---L          <- *branch2
+      #        /
+      #       I---J            <-  branch1
+      #      /
+      # A---B---C---E---F      <-  main
+      {
+        "current_branch": "branch2",
+        "no_push": False,
+        "branches_deletable": [],
+        "branches_ahead_shas": {
+          "branch1": ["iiiii", "jjjjj"],
+          "branch5": ["iiiii", "kkkkk", "lllll", "mmmmm", "nnnnn", "ooooo"],
+          "branch6": ["iiiii", "kkkkk", "lllll", "mmmmm", "ppppp"],
+          "branch2": ["iiiii", "kkkkk", "lllll"],
+          "branch3": ["iiiii", "kkkkk", "lllll", "mmmmm"],
+          "branch4": ["iiiii", "kkkkk", "lllll", "mmmmm"],
+        },
+        "branches_with_merge_commits": [],
+        "branches_safe_to_push": [],
+      },
+      (
+        None,
+        [
+          "git add . && git commit --amend --no-edit",
+          "git checkout branch3 && git rebase --onto branch2 branch3~1",
+          "git checkout branch4 && git reset --hard branch3",
+          "git checkout branch6 && git rebase --onto branch3 branch6~1",
+          "git checkout branch5 && git rebase --onto branch3 branch5~2",
+          "git checkout branch2",
+        ],
+      ),
+    ],
+    [
+      {
+        "current_branch": "branch1",
+        "no_push": False,
+        "branches_deletable": [],
+        "branches_ahead_shas": {
+          "branch1": ["iiiii", "jjjjj"],
+          "branch5": ["iiiii", "kkkkk", "lllll", "mmmmm", "nnnnn", "ooooo"],
+          "branch6": ["iiiii", "kkkkk", "lllll", "mmmmm", "ppppp"],
+          "branch2": ["iiiii", "kkkkk", "lllll"],
+          "branch3": ["iiiii", "kkkkk", "lllll", "mmmmm"],
+          "branch4": ["iiiii", "kkkkk", "lllll", "mmmmm"],
+        },
+        "branches_with_merge_commits": [],
+        "branches_safe_to_push": [],
+      },
+      (None, ["git add . && git commit --amend --no-edit"]),
+    ],
+  ]
+
+  for test_case in test_cases:
+    assert generate_amend_commands(**test_case[0]) == test_case[1]

@@ -81,7 +81,9 @@ def main() -> int:
     help="Automatically run update commands. THIS IS DANGEROUS!",
   )
 
-  parser.add_argument(
+  group = parser.add_mutually_exclusive_group()
+  group.add_argument("operation", nargs="?", choices=["amend"], help="Operation")
+  group.add_argument(
     "-s", "--short", action="store_true", default=False, help="Show a short list only"
   )
 
@@ -105,16 +107,53 @@ def branches(args: argparse.Namespace) -> int:
   # `header_style=""`` removes the bold which makes assigning a yellow header not work.
   ret = 0
 
+  repo = GitUtils.repo_from_path()
+  if repo is None:
+    print("Not a git repository.")
+    return 1
+
+  git_utils = GitUtils(repo=repo)
   table = Table(box=box.SIMPLE_HEAD, header_style="")
   for _column_key, column_attr in COLUMNS.items():
     table.add_column(column_attr["column_name"], **(column_attr["column_props"] or {}))
 
-  with Live(table, console=console, refresh_per_second=20):
-    update_commands_params = print_table(args, table)
+  if args.operation == "amend":
+    args.short = True
 
-  update_commands = generate_update_commands(**update_commands_params)
+  with Live(table, console=console, refresh_per_second=20):
+    update_commands_params = print_table(args, table, git_utils)
+
+  print("")
+
+  if args.operation is None:
+    update_commands = generate_update_commands(**update_commands_params)
+  elif args.operation == "amend":
+    if len(git_utils.current_branch() or "") <= 0:
+      print("Cannot run amend on a detached HEAD. Check out a branch first.\n")
+      return 1
+
+    if git_utils.main_branch() == git_utils.current_branch():
+      print("Cannot run amend on the main branch. Checkout a different branch.\n")
+      return 1
+
+    changes_to_add = (
+      git_utils.staged_changes_filepaths()
+      + git_utils.unstaged_changes_filepaths()
+      + git_utils.untracked_filepaths()
+    )
+
+    if len(changes_to_add) <= 0:
+      print("No changes to amend with.\n")
+      return 1
+
+    err, update_commands = generate_amend_commands(**update_commands_params)
+    if len(err or "") > 0:
+      print(err)
+      return 1
+  else:
+    update_commands = []  # Unexpected
+
   if len(update_commands) > 0:
-    print("")
     print(" && \\\n".join(update_commands))
     print("")
     if args.yes or ("PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?")):
@@ -126,7 +165,7 @@ def branches(args: argparse.Namespace) -> int:
   return ret
 
 
-def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
+def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> DictUpdateParams:
   """Prints out the state of all local branches in a table.
 
   Returns:
@@ -145,11 +184,11 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
     "branches_safe_to_push": [],
   }
 
-  git_utils = GitUtils()
   main_branch = git_utils.main_branch()
   all_branches = git_utils.branches()
 
   ret["main_branch"] = main_branch
+  ret["current_branch"] = git_utils.current_branch()
 
   branch_distances = {}
   for branch in all_branches:
@@ -173,7 +212,7 @@ def print_table(args: argparse.Namespace, table: Table) -> DictUpdateParams:
   )
 
   ret["branches"] = local_branches_order(
-    all_branches, main_branch, git_utils.current_branch(), base_branches, args.short
+    all_branches, main_branch, ret["current_branch"], base_branches, args.short
   )
 
   remote_shas = git_utils.remote_shas(ret["branches"])
@@ -408,6 +447,60 @@ def local_branches_order(
   return ret
 
 
+def generate_amend_commands(
+  current_branch: StrBranchName,
+  no_push: bool,
+  branches_deletable: list[StrBranchName],
+  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
+  branches_with_merge_commits: list[StrBranchName],
+  branches_safe_to_push: list[StrBranchName],
+  **kwargs,
+) -> tuple[str | None, list[StrCommand] | None]:
+  """Returns a list of commands to run to amend the current commit and maintain tree structure
+
+  It returns a tuple with two values:
+  Returns:
+    Tuple with two values:
+    1. If an error occurs, this will be the message string, otherwise None.
+    2. A list of commands to run
+  """
+  if current_branch not in branches_ahead_shas or current_branch in branches_with_merge_commits:
+    return ("Tool limitation: cannot amend or update branches with merge commits.", None)
+
+  relevant_branches_ahead_shas: dict[StrBranchName, list[StrShaShort]] = {}
+  for branch, shas in branches_ahead_shas.items():
+    if branch == current_branch:
+      continue
+
+    if shas[: len(branches_ahead_shas[current_branch])] == branches_ahead_shas[current_branch]:
+      relevant_branches_ahead_shas[branch] = shas[len(branches_ahead_shas[current_branch]) :]
+
+  if set(branches_with_merge_commits) & set(relevant_branches_ahead_shas.keys()):
+    return ("Tool limitation: cannot amend or update branches with merge commits.", None)
+
+  amend_commands = ["git add . && git commit --amend --no-edit"]
+
+  if current_branch in branches_safe_to_push:
+    amend_commands[0] += " && git push -f"
+
+  return (
+    None,
+    amend_commands
+    + generate_update_commands(
+      relevant_branches_ahead_shas.keys(),
+      current_branch,
+      no_push,
+      branches_deletable,
+      False,
+      relevant_branches_ahead_shas.keys(),
+      relevant_branches_ahead_shas,
+      branches_with_merge_commits,
+      branches_safe_to_push,
+      True,
+    ),
+  )
+
+
 def generate_update_commands(
   branches: list[StrBranchName],
   main_branch: StrBranchName,
@@ -494,7 +587,6 @@ def rebase_command(
   elif starting_from == 0:
     ret += f" && git reset --hard {base_branch}"
   else:
-    # TODO: Do we need a `-X ours`?
     ret += f" && git rebase --onto {base_branch} {branch_to_rebase}~{starting_from}"
 
   if branch_to_rebase in branches_safe_to_push and not no_push:
