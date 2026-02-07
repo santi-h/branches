@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.14.0", "3.x"]
+        python-version: ["3.14.3", "3.x"]
 
     steps:
       - name: Check out code
