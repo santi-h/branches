@@ -34,7 +34,7 @@ def test_local_branches_order():
         "all_branches": ["main", "feature-a", "feature-b"],
         "main_branch": "main",
         "current_branch": "feature-b",
-        "base_branches": {"feature-b": "feature-a~2"},
+        "base_branches": {"feature-b": ("feature-a~2", 1)},
         "short": True,
       },
       ["main", "feature-b", "feature-a"],
@@ -44,7 +44,7 @@ def test_local_branches_order():
         "all_branches": ["main", "feature-a", "feature-b"],
         "main_branch": "main",
         "current_branch": "feature-b",
-        "base_branches": {"feature-a": "feature-b~2"},
+        "base_branches": {"feature-a": ("feature-b~2", 1)},
         "short": True,
       },
       ["main", "feature-b", "feature-a"],
@@ -55,10 +55,10 @@ def test_local_branches_order():
         "main_branch": "main",
         "current_branch": "feature-b",
         "base_branches": {
-          "feature-b": "feature-a~2",
-          "feature-c": "feature-b~1",
-          "feature-d": "feature-c~54",
-          "feature-e": "feature-a~1",
+          "feature-b": ("feature-a~2", 1),
+          "feature-c": ("feature-b~1", 1),
+          "feature-d": ("feature-c~54", 1),
+          "feature-e": ("feature-a~1", 1),
         },
         "short": True,
       },
@@ -70,9 +70,9 @@ def test_local_branches_order():
         "main_branch": "main",
         "current_branch": "feature-b",
         "base_branches": {
-          "feature-c": "feature-b~1",
-          "feature-d": "feature-c~54",
-          "feature-e": "feature-a~1",
+          "feature-c": ("feature-b~1", 1),
+          "feature-d": ("feature-c~54", 1),
+          "feature-e": ("feature-a~1", 1),
         },
         "short": True,
       },
@@ -84,9 +84,9 @@ def test_local_branches_order():
         "main_branch": "main",
         "current_branch": "feature-c",
         "base_branches": {
-          "feature-c": "feature-b~1",
-          "feature-d": "feature-c~54",
-          "feature-e": "feature-a~1",
+          "feature-c": ("feature-b~1", 1),
+          "feature-d": ("feature-c~54", 1),
+          "feature-e": ("feature-a~1", 1),
         },
         "short": True,
       },
@@ -98,9 +98,9 @@ def test_local_branches_order():
         "main_branch": "main",
         "current_branch": "main",
         "base_branches": {
-          "feature-c": "feature-b~1",
-          "feature-d": "feature-c~54",
-          "feature-e": "feature-a~1",
+          "feature-c": ("feature-b~1", 1),
+          "feature-d": ("feature-c~54", 1),
+          "feature-e": ("feature-a~1", 1),
         },
         "short": True,
       },
@@ -138,7 +138,14 @@ def test_branches_ahead_shas_to_refs():
 
 def test_rebase_order():
   assert rebase_order(
-    {"b8": "b5~1", "b9": "b8", "b3": "b2", "b4": "b3~1", "b6": "b5", "b7": "b6"}
+    {
+      "b8": ("b5~1", 1),
+      "b9": ("b8", 1),
+      "b3": ("b2", 1),
+      "b4": ("b3~1", 1),
+      "b6": ("b5", 1),
+      "b7": ("b6", 1),
+    }
   ) == ["b5", "b8", "b9", "b2", "b3", "b4", "b6", "b7"]
 
 
@@ -154,7 +161,14 @@ def test_base_branches_from_branches_ahead_refs():
       ("b6", ["b5~1", "b5", "b6"]),
       ("b7", ["b5~1", "b5", "b6", "b7"]),
     ]
-  ) == {"b8": "b5~1", "b9": "b8", "b3": "b2", "b4": "b3~1", "b6": "b5", "b7": "b6"}
+  ) == {
+    "b8": ("b5~1", 1),
+    "b9": ("b8", 0),
+    "b3": ("b2", 2),
+    "b4": ("b3~1", 1),
+    "b6": ("b5", 1),
+    "b7": ("b6", 1),
+  }
 
 
 def test_generate_update_commands():
@@ -234,14 +248,29 @@ def test_generate_update_commands():
         "git checkout main",
         "git branch -D test-branch-3",
         "git checkout b10 && git rebase main",
-        "git checkout b8 && git rebase b10~2",
-        "git checkout b9 && git rebase b10~1 && git push -f",
+        "git checkout b8 && git rebase --onto b10~2 b8~2",
+        "git checkout b9 && git rebase --onto b10~1 b9~1 && git push -f",
         "git checkout test-branch-1 && git rebase main",
         "git checkout test-branch-2 && git rebase main",
         "git checkout main",
       ],
     ],
     [
+      #             I      <- b7
+      #            /
+      #           H        <- b6
+      #          /
+      #         E          <- b5
+      #        /
+      #       A---B        <- b8, b9
+      #      /
+      # *---*---*          <- main, b1
+      #          \
+      #           C        <- b2
+      #            \
+      #             D---F  <- b3
+      #              \
+      #               G    <- b4
       {
         "branches": ["main", "b8", "b2", "b3", "b4", "b5", "b6", "b7", "b9", "b1"],
         "main_branch": "main",
@@ -250,24 +279,24 @@ def test_generate_update_commands():
         "unsynced_main": False,
         "branches_behind": ["b8", "b5", "b6", "b7", "b9"],
         "branches_ahead_shas": {
-          "b8": ["b4a32", "a2582"],
-          "b2": ["38089"],
-          "b3": ["38089", "42d83", "21d67"],
-          "b4": ["38089", "42d83", "1f95c"],
-          "b5": ["b4a32", "31b9b"],
-          "b6": ["b4a32", "31b9b", "975a7"],
-          "b7": ["b4a32", "31b9b", "975a7", "3d1a4"],
-          "b9": ["b4a32", "a2582"],
+          "b8": ["aaaaa", "bbbbb"],
+          "b2": ["ccccc"],
+          "b3": ["ccccc", "ddddd", "fffff"],
+          "b4": ["ccccc", "ddddd", "ggggg"],
+          "b5": ["aaaaa", "eeeee"],
+          "b6": ["aaaaa", "eeeee", "hhhhh"],
+          "b7": ["aaaaa", "eeeee", "hhhhh", "iiiii"],
+          "b9": ["aaaaa", "bbbbb"],
         },
         "branches_with_merge_commits": [],
         "branches_safe_to_push": [],
       },
       [
         "git checkout b5 && git rebase main",
-        "git checkout b8 && git rebase b5~1",
-        "git checkout b9 && git rebase b8",
-        "git checkout b6 && git rebase b5",
-        "git checkout b7 && git rebase b6",
+        "git checkout b8 && git rebase --onto b5~1 b8~1",
+        "git checkout b9 && git reset --hard b8",
+        "git checkout b6 && git rebase --onto b5 b6~1",
+        "git checkout b7 && git rebase --onto b6 b7~1",
         "git checkout main",
       ],
     ],
