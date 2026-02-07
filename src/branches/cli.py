@@ -66,11 +66,21 @@ def main() -> int:
   """Entry point for the CLI."""
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument(
-    "-s", "--short", action="store_true", default=False, help="Show a short list only"
-  )
-  parser.add_argument(
     "--no-push", action="store_true", default=False, help="Do not suggest push commands"
   )
+
+  parser.add_argument(
+    "-y",
+    "--yes",
+    action="store_true",
+    default=False,
+    help="Automatically run update commands. THIS IS DANGEROUS!",
+  )
+
+  parser.add_argument(
+    "-s", "--short", action="store_true", default=False, help="Show a short list only"
+  )
+
   return branches(parser.parse_args())
 
 
@@ -97,8 +107,11 @@ def branches(args: argparse.Namespace) -> int:
     print("")
     print(" && \\\n".join(update_commands))
     print("")
-    if "PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?"):
-      ret = subprocess.run(" && ".join(update_commands), shell=True).returncode
+    if args.yes or ("PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?")):
+      sys.stdout.flush()
+      ret = subprocess.run(
+        " && ".join(update_commands), shell=True, stderr=subprocess.STDOUT
+      ).returncode
 
   return ret
 
