@@ -343,6 +343,19 @@ def test_cli_misc():
   )
 
   run_test(
+    "git checkout branch9",
+    "branches -s -q",
+    [
+      r"                                                         ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base   PR  ",
+      r" ─────────────────────────────────────────────────────── ",
+      r"           \w{5}      0    0   0    main                 ",
+      r"           \w{5}      0    2   1    branch9              ",
+      r"                                                         ",
+    ],
+  )
+
+  run_test(
     "git checkout branch9 && echo test >> Q.txt && git add Q.txt",
     "branches amend",
     [

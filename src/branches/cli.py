@@ -75,6 +75,10 @@ def main() -> int:
   )
 
   parser.add_argument(
+    "-q", "--quiet", action="store_true", default=False, help="Do not suggest update commands"
+  )
+
+  parser.add_argument(
     "-v", "--version", action="store_true", default=False, help="Print version and exit"
   )
 
@@ -162,7 +166,7 @@ def branches(args: argparse.Namespace) -> int:
   else:
     update_commands = []  # Unexpected
 
-  if len(update_commands) > 0:
+  if len(update_commands) > 0 and not args.quiet:
     print(" && \\\n".join(update_commands))
     print("")
     if args.yes or ("PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?")):
