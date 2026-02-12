@@ -288,7 +288,11 @@ def table_row(
         ret["unsynced_main"] = True
 
   try:
-    pr = pull_request(branch)
+    pr = None
+    if "GITHUB_TOKEN" in os.environ:
+      pr = pull_request(branch, os.environ["GITHUB_TOKEN"])
+    elif show_warnings and "PYTEST_CURRENT_TEST" not in os.environ:
+      print("WARNING: GITHUB_TOKEN envar is not set.")
   except requests.exceptions.ConnectionError:
     pr = None
     if show_warnings:
@@ -346,6 +350,11 @@ def table_row(
       remote_author_emails.add(git_utils.commit_author_email(sha))
 
   has_different_author = False
+
+  current_user_email = git_utils.current_user_email()
+  if current_user_email is None and show_warnings:
+    print("WARNING: Not user email configured in git.")
+    print("Set it with git config --global user.email 'first.last@example.com'")
 
   if any(email != git_utils.current_user_email() for email in remote_author_emails):
     has_different_author = True
@@ -720,7 +729,7 @@ def base_branches_from_branches_ahead_refs(
   return ret
 
 
-def pull_request(branch: StrBranchName) -> dict | None:
+def pull_request(branch: StrBranchName, github_token: str) -> dict | None:
   """Fetches the pull request for a given branch from the GitHub API.
 
   Assumes the envar `GITHUB_TOKEN` is set.
@@ -740,7 +749,6 @@ def pull_request(branch: StrBranchName) -> dict | None:
   if owner is None or repo is None:
     return None
 
-  github_token = os.environ["GITHUB_TOKEN"]
   params = urlencode({"head": f"{owner}:{branch}", "state": "all"})
 
   response = requests.get(

@@ -182,8 +182,11 @@ class GitUtils:
     )
     return [sha for sha in re.split(r"\s+", result.strip()) if sha.strip()]
 
-  def current_user_email(self) -> str:
-    return self._cmd.execute(["git", "config", "user.email"]).strip()
+  def current_user_email(self) -> str | None:
+    try:
+      return self._cmd.execute(["git", "config", "user.email"]).strip()
+    except git.exc.GitCommandError:
+      return None
 
   def commit_author_email(self, sha):
     return self._cmd.execute(["git", "show", "--format=%ae", "--no-patch", sha]).strip()
