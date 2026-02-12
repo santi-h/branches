@@ -1,5 +1,5 @@
-#!/usr/bin/env zsh
-set -e # Strict mode. Exit if any any command (like `checksum`) returns non-zero
+#!/usr/bin/env bash
+set -euo pipefail # Strict mode. Exit if any any command (like `checksum`) returns non-zero
 
 TAG_NAME=$(
   curl -s https://api.github.com/repos/santi-h/branches/releases/latest |
@@ -7,9 +7,28 @@ TAG_NAME=$(
   sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/'
 )
 
+case "$(uname -s | tr '[:upper:]' '[:lower:]')" in
+  darwin) NORM_OS="macos" ;;
+  linux)  NORM_OS="linux" ;;
+  *)
+    echo "Unsupported OS: $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+
+case "$(uname -m | tr '[:upper:]' '[:lower:]')" in
+  x86_64)  NORM_ARCH="amd64" ;;
+  aarch64) NORM_ARCH="arm64" ;;
+  arm64)   NORM_ARCH="arm64" ;;
+  *)
+    echo "Unsupported Arch: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
 TMPDIR="$(mktemp -d)"
 VERSION="${TAG_NAME#v}"
-BASENAME="branches-macos-arm64-$VERSION"
+BASENAME="branches-$NORM_OS-$NORM_ARCH-$VERSION"
 FILENAME_TARBALL="$BASENAME.tar.gz"
 FILENAME_SHA="$BASENAME.sha256"
 FILEPATH_DOWNLOADED_TARBALL="$TMPDIR/$FILENAME_TARBALL"
@@ -19,6 +38,8 @@ DIRPATH_FOR_BIN_LN="$HOME/.local/bin"
 
 echo "                     TMPDIR=$TMPDIR"
 echo "                    VERSION=$VERSION"
+echo "                  NORM_ARCH=$NORM_ARCH"
+echo "                    NORM_OS=$NORM_OS"
 echo "                   BASENAME=$BASENAME"
 echo "           FILENAME_TARBALL=$FILENAME_TARBALL"
 echo "               FILENAME_SHA=$FILENAME_SHA"

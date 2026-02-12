@@ -37,7 +37,7 @@ branches --help
 
 ## Assumptions and requirements
 
-- This script was built on MacOS arm64 and was not tested in any other OS/Chip.
+- This script is mostly developed and tested on arm64 MacOS. Executables for arm64 Linux and amd64 Linux are created and should work but not as manually tested. The CI tests do run on Linux though.
 - `git` is installed in the system.
 - The main remote is called `origin`. If there is no `origin` set the script will work but some features won't be available.
 - `origin` points to GitHub using a SSH shorthand URL. For example `"git@github.com:santi-h/branches.git"` (I.e. no HTTPS)
@@ -370,42 +370,26 @@ To run a specific test:
 pytest -k test_generate_update_commands
 ```
 
-## TODOs
+## Distribution Step 1: Create executables
 
-- [ ] When main is ahead locally the cleanup command is suggesting to "git pull" main. In these cases a warning should be displayed and no update commands should be suggested. The user would have to either push their main branch changes first, or branch off them and drop the ahead commits.
-- [ ] Test case when main is merged onto the local feature branch. When main moves on, should `branches` suggest rebase commands for the local feature branch?
-- [ ] If multiple people added commits to a local feature branch, don't suggest rebasing.
-- [ ] If the local feature branch can be fast forwarded to the remote sha, then suggest a `git pull` on that local feature branch. Then suggest a rebase if one needed. Handle edge case when local feature branch is 0 commits ahead.
-- [ ] If local and remote have diverged, consider suggesting a `git rebase origin/feature-branch`.
-- [ ] Investiage usage of [advanced search](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/filtering-and-searching-issues-and-pull-requests#building-advanced-filters-for-issues) to load PRs in bulk.
-
-## Distribution Step 1: Create executable
+This command will create all executables in `dist/`
 
 ```shell
-rm -rf dist/ build/ && \
-pyinstaller --onedir --name branches --paths src src/branches/__main__.py && \
-rm -rf build/
+scripts/build.sh
 ```
-
-The second to last line could be replaced with `pyinstaller branches.spec`
 
 ## Distribution Step 2: Create Github Release
 
+Make sure the `VERSION` in `src/branches/__init__.py` is updated, and then run:
+
 ```shell
-# from repo root after build
-cd dist
-
-VERSION=0.1.0
-
-BASENAME=branches-macos-arm64-$VERSION && \
-tar -czf $BASENAME.tar.gz -C branches . && \
-shasum -a 256 $BASENAME.tar.gz > $BASENAME.sha256 && \
+VERSION=$(PYTHONPATH=src python -c "from branches import VERSION; print(VERSION)") && \
 git tag v$VERSION && git push origin v$VERSION && \
 open 'https://github.com/santi-h/branches/releases/new' && \
-open .
+open ./dist/
 ```
 
-Then on GitHub, go to [New Release](https://github.com/santi-h/branches/releases/new) and fill out the fields. Remember to upload the `.tar.gz` and `.sha256`.
+Then on GitHub, go to [New Release](https://github.com/santi-h/branches/releases/new) and fill out the fields. Remember to upload the `.tar.gz` and `.sha256` files.
 
 For pre-releases, use versions with the following format examples:
 
@@ -418,10 +402,3 @@ Remember the precedence:
 `0.1.0-alpha`< `0.1.0-alpha.1`< `0.1.0-beta.3`< `0.1.0-rc.1` < `0.1.0`
 
 The first four are considered "pre-releases". For those, select the "Set as a pre-release" option in the Github UI.
-
-If this is not a pre-release, move the `stable` branch to point to this release:
-
-```shell
-git checkout v$VERSION; git branch -D stable;
-git checkout -b stable; git push origin stable -f
-```
