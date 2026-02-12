@@ -66,10 +66,10 @@ docker run --rm -it \
   '
 
 for pair_path in linux/amd64 linux/arm64 macos/arm64; do
-  TAR_BASENAME=$ROOT_DIR/dist/branches-"${pair_path//\//-}"-$BRANCHES_VERSION
+  TAR_BASENAME=branches-"${pair_path//\//-}"-$BRANCHES_VERSION
 
-  tar -czf "$TAR_BASENAME.tar.gz" -C "$ROOT_DIR/dist/$pair_path/branches" .
-  shasum -a 256 "$TAR_BASENAME.tar.gz" > "$TAR_BASENAME.sha256"
+  tar -czf "$ROOT_DIR/dist/$TAR_BASENAME.tar.gz" -C "$ROOT_DIR/dist/$pair_path/branches" .
+  ( cd "$ROOT_DIR/dist" && shasum -a 256 "$TAR_BASENAME.tar.gz" > "$TAR_BASENAME.sha256" )
 done
 
 rm -rf "$ROOT_DIR/build"
