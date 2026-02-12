@@ -1,5 +1,6 @@
 # Example usage:
 # python branches.py
+from . import VERSION
 import argparse
 from .utils.git_utils import GitUtils
 import requests
@@ -74,6 +75,10 @@ def main() -> int:
   )
 
   parser.add_argument(
+    "-v", "--version", action="store_true", default=False, help="Print version and exit"
+  )
+
+  parser.add_argument(
     "-y",
     "--yes",
     action="store_true",
@@ -106,6 +111,10 @@ def branches(args: argparse.Namespace) -> int:
   """
   # `header_style=""`` removes the bold which makes assigning a yellow header not work.
   ret = 0
+
+  if args.version:
+    print(VERSION)
+    return ret
 
   repo = GitUtils.repo_from_path()
   if repo is None:
