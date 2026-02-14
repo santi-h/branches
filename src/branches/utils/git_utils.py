@@ -47,7 +47,11 @@ class GitUtils:
       return self._owner_name, self._repo_name
 
     remotes = self._cmd.execute(["git", "remote", "-v"])
-    match = re.search(r"github\.com(?::|\/)([\w\-]+)\/([\w\-]+)\.git \(fetch\)", remotes)
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+      match = re.search(r"github\.com(?::|\/)([\w\-]+)\/([\w\-]+)\.git \(fetch\)", remotes)
+    else:
+      match = re.search(r"([\w\-]+)\/([\w\-]+) \(fetch\)", remotes)
+
     if match is not None:
       self._owner_name = match.group(1)
       self._repo_name = match.group(2)
