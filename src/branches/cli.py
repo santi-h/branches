@@ -762,10 +762,19 @@ def pull_request(branch: StrBranchName, github_token: str) -> dict | None:
   if owner is None or repo is None:
     return None
 
+  proto = "https"
+  domain = "api.github.com"
+  if "PYTEST_CURRENT_TEST" in os.environ:
+    if "GITHUB_PROTO" in os.environ and "GITHUB_DOMAIN" in os.environ:
+      proto = os.environ.get("GITHUB_PROTO", proto)
+      domain = os.environ.get("GITHUB_DOMAIN", "localhost")
+    else:
+      return None
+
   params = urlencode({"head": f"{owner}:{branch}", "state": "all"})
 
   response = requests.get(
-    f"https://api.github.com/repos/{owner}/{repo}/pulls?{params}",
+    f"{proto}://{domain}/repos/{owner}/{repo}/pulls?{params}",
     headers={
       "Accept": "application/vnd.github+json",
       "Authorization": f"Bearer {github_token}",
@@ -774,7 +783,7 @@ def pull_request(branch: StrBranchName, github_token: str) -> dict | None:
   )
 
   if response.status_code != 200:
-    raise GitHubApiError(f"GitHub returned a {response.status_code}")
+    raise GitHubApiError(f"GitHub returned a {response.status_code}: {response.text}")
 
   pull_requests = response.json()
   if len(pull_requests) > 0:

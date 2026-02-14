@@ -3,4 +3,5 @@
 
 pyinstaller
 pytest
+pytest-httpserver
 ruff

@@ -36,6 +36,7 @@ def run_test(
   expected_stdout: str | list[str],
   expected_returncode=0,
   cleanup_command: str | None = None,
+  github_domain: str | None = None,
 ):
   if len(prep_command or "") > 0:
     result = run_command(prep_command)
@@ -43,8 +44,18 @@ def run_test(
       f"Prep command output:\n{result.stdout}\nPrep command stderr:\n{result.stderr}"
     )
 
+  envars = [f"PYTHONPATH='{SRC_DIRPATH}'"]
+  if github_domain is not None:
+    envars += [
+      "GITHUB_PROTO='http'",
+      f"GITHUB_DOMAIN='{github_domain}'",
+      "GITHUB_TOKEN='testtoken'",
+    ]
+
+  envars = " ".join(envars)
+  print(envars)
   result = subprocess.run(
-    f"cd '{GIT_TMP_DIRPATH_LOCAL}' && PYTHONPATH='{SRC_DIRPATH}' python -m {trigger_command}",
+    f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {envars} python -m {trigger_command}",
     shell=True,
     capture_output=True,
     text=True,
@@ -54,14 +65,18 @@ def run_test(
     with open(os.path.join(os.path.dirname(__file__), "test_cli_result.txt"), "w") as result_file:
       result_file.write(result.stdout)
 
-  assert result.returncode == expected_returncode, f"Full output:\n{result.stdout}"
+  assert result.returncode == expected_returncode, (
+    f"Unexpected returncode {result.returncode}. Full output:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+  )
 
   result_lines = result.stdout.splitlines()
 
   if isinstance(expected_stdout, str):
     expected_stdout = expected_stdout.splitlines()
 
-  assert len(result_lines) == len(expected_stdout), f"Full output:\n{result.stdout}"
+  assert len(result_lines) == len(expected_stdout), (
+    f"Unexpected line length {len(result_lines)}. Full output:\n{result.stdout}"
+  )
   for idx, (result_line, expected_line) in enumerate(zip(result_lines, expected_stdout)):
     assert re.fullmatch(expected_line, result_line), (
       f"Line {idx + 1}\n"
@@ -72,6 +87,113 @@ def run_test(
 
   if len(cleanup_command or "") > 0:
     subprocess.run(f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {cleanup_command}", shell=True)
+
+
+def test_mockserver(httpserver):
+  #       C     <- branch1
+  #      /
+  # A---B---D   <- main
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+  tformat = "%Y-%m-%dT%H:%M:%S%z"
+
+  github_requests_expected = [
+    (
+      "main",
+      [],
+    ),
+    (
+      "branch1",
+      [
+        {
+          "number": 123,
+          "title": "Fix thing",
+          "head": {"sha": "5259dcf3e0e9b774689f5fb761e07d25f6683fd5"},
+          "html_url": "http://localhost/branches/test_cli_origin/pull/123",
+          "user": {"login": "santi-h"},
+        }
+      ],
+    ),
+  ]
+  for expected_branch, expected_payload in github_requests_expected:
+    httpserver.expect_ordered_request(
+      "/repos/branches/test_cli_origin/pulls",
+      method="GET",
+      query_string={"head": f"branches:{expected_branch}", "state": "all"},
+    ).respond_with_json(expected_payload, status=200)
+
+  run_test(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN} && "
+    "echo 'A.txt' > A.txt && git add . && "
+    f"git commit -m 'A' --date='{(now + sec * 1).strftime(tformat)}' && git push && "
+    "echo 'B.txt' > B.txt && git add . && "
+    f"git commit -m 'B' --date='{(now + sec * 2).strftime(tformat)}' && "
+    "git checkout -b branch1 && "
+    "echo 'C.txt' > C.txt && git add . && "
+    f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}' && "
+    "git checkout main && "
+    "echo 'D.txt' > D.txt && git add . && "
+    f"git commit -m 'D' --date='{(now + sec * 4).strftime(tformat)}' && git push",
+    "branches",
+    [
+      r"                                                                              ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base   PR                       ",
+      r" ──────────────────────────────────────────────────────────────────────────── ",
+      r"   \w{5}   \w{5}      0    0   0    main                                      ",
+      r"           \w{5}      0    1   1    branch1          #123 \(5259d\) by santi-h  ",
+      r"                                                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    github_domain=httpserver.host + ":" + str(httpserver.port),
+  )
+
+  # If the PR is merged and the head sha of the PR is exactly the same as the local sha, suggest
+  # deletion.
+  github_requests_expected = [
+    (
+      "main",
+      [],
+    ),
+    (
+      "branch1",
+      [
+        {
+          "number": 123,
+          "title": "Fix thing",
+          "head": {"sha": run_command("git rev-parse branch1").stdout.strip()},
+          "html_url": "http://localhost/branches/test_cli_origin/pull/123",
+          "user": {"login": "santi-h"},
+          "merged_at": "2026-02-14T16:31:13Z",
+        }
+      ],
+    ),
+  ]
+  for expected_branch, expected_payload in github_requests_expected:
+    httpserver.expect_ordered_request(
+      "/repos/branches/test_cli_origin/pulls",
+      method="GET",
+      query_string={"head": f"branches:{expected_branch}", "state": "all"},
+    ).respond_with_json(expected_payload, status=200)
+
+  run_test(
+    "git checkout branch1",
+    "branches",
+    [
+      r"                                                                              ",
+      r"  Origin   Local    Age   <-   ->   Branch    Base   PR                       ",
+      r" ──────────────────────────────────────────────────────────────────────────── ",
+      r"   \w{5}   \w{5}      0    0   0    main                                      ",
+      r"           \w{5}      0    1   1    branch1          #123 \(\w{5}\) by santi-h  ",
+      r"                                                                              ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git checkout main",
+      r"",
+    ],
+    github_domain=httpserver.host + ":" + str(httpserver.port),
+  )
 
 
 def test_cli_misc():
