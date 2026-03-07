@@ -6,3 +6,4 @@ __pycache__/
 /tests/branches/test_cli_local/
 /tests/branches/test_cli_origin/
 /tests/branches/test_cli_result.txt
+/tests/branches/test_cli_result.py

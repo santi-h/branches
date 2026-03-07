@@ -3,6 +3,7 @@
 from . import VERSION
 import argparse
 from .utils.git_utils import GitUtils
+from git import Commit
 import requests
 import os
 import subprocess
@@ -35,7 +36,19 @@ MERGE_COMMIT_COLOR = "dark_orange3"
 # Starting with Python 3.7, dictionaries officially maintain the order in which keys were inserted
 # The logic in this script assumes this is the case.
 COLUMNS = {
-  "origin": {"column_name": "Origin", "column_props": {"no_wrap": True, "justify": "right"}},
+  "origin": {
+    "column_name": "Origin",
+    "column_props": {
+      "no_wrap": True,
+      "justify": "right",
+    },
+  },
+  "relationship": {
+    "column_name": "-",
+    "column_props": {
+      "justify": "center",
+    },
+  },
   "local": {
     "column_name": "Local",
     "column_props": {
@@ -53,11 +66,26 @@ COLUMNS = {
       "header_style": f"{LOCAL_SHA_COLOR}",
     },
   },
-  "behind": {"column_name": "<-", "column_props": {"justify": "right"}},
-  "ahead": {"column_name": "->", "column_props": {"justify": "left"}},
-  "branch": {"column_name": "Branch", "column_props": None},
-  "base": {"column_name": "Base", "column_props": None},
-  "pr": {"column_name": "PR", "column_props": None},
+  "behind": {
+    "column_name": "<-",
+    "column_props": {"justify": "right"},
+  },
+  "ahead": {
+    "column_name": "->",
+    "column_props": {"justify": "left"},
+  },
+  "branch": {
+    "column_name": "Branch",
+    "column_props": None,
+  },
+  "base": {
+    "column_name": "Base",
+    "column_props": None,
+  },
+  "pr": {
+    "column_name": "PR",
+    "column_props": None,
+  },
 }
 
 PR_STATUS_COLORS = {"open": "green", "closed": "red", "merged": "medium_purple1"}
@@ -126,7 +154,7 @@ def branches(args: argparse.Namespace) -> int:
     return 1
 
   git_utils = GitUtils(repo=repo)
-  table = Table(box=box.SIMPLE_HEAD, header_style="")
+  table = Table(padding=(0, 0), box=box.SIMPLE_HEAD, header_style="")
   for _column_key, column_attr in COLUMNS.items():
     table.add_column(column_attr["column_name"], **(column_attr["column_props"] or {}))
 
@@ -279,7 +307,7 @@ def table_row(
   local_sha_short = local_sha[:5]
   local_author_emails: set[str] = set()
 
-  remote_commit = None
+  remote_commit: Commit | None = None
   remote_sha = remote_shas.get(branch)
   remote_sha_short = ""
   remote_author_emails: set[str] = set()
@@ -352,8 +380,15 @@ def table_row(
       message_remote_sha = f"[dim]{remote_sha_short}[/dim]"
     else:
       message_remote_sha = f"[bold]{remote_sha_short}[/bold]"
+
+    if git_utils.is_ancestor(remote_commit, local_commit):
+      row_dict["relationship"] = "<"
+    elif git_utils.is_ancestor(local_commit, remote_commit):
+      row_dict["relationship"] = ">"
+    else:
+      row_dict["relationship"] = "[yellow]Y[/yellow]"
   else:
-    message_remote_sha = remote_sha_short
+    message_remote_sha = remote_sha_short  # should be empty
 
   if sync_status in ["synced", "unsynced"] and branch != ret["main_branch"]:
     owner, repo = git_utils.owner_and_repo()
@@ -366,7 +401,7 @@ def table_row(
 
   current_user_email = git_utils.current_user_email()
   if current_user_email is None and show_warnings:
-    print("WARNING: Not user email configured in git.")
+    print("WARNING: No user email configured in git.")
     print("Set it with git config --global user.email 'first.last@example.com'")
 
   if any(email != git_utils.current_user_email() for email in remote_author_emails):
