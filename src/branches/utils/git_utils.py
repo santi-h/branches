@@ -1,6 +1,7 @@
 import os
 import git
 from git import Commit
+from gitdb.exc import BadName
 import re
 
 
@@ -128,6 +129,18 @@ class GitUtils:
   def fetch_sigle_sha(self, sha):
     self._repo.remotes.origin.fetch(sha)
     return self.local_commit_from_sha(sha)
+
+  def is_ancestor(self, older_commit: Commit, newer_commit: Commit) -> bool | None:
+    """
+    Returns:
+      True if `older_commit` is an ancestor of `newer_commit`
+      False otherwise
+      None if either one does not exist locally or an issue occurred
+    """
+    try:
+      return self._repo.is_ancestor(older_commit, newer_commit)
+    except BadName, git.exc.GitCommandError:
+      return None
 
   def remote_shas(self, branches) -> dict[str, str]:
     ret = {}

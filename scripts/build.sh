@@ -4,9 +4,7 @@
 # - pip-sync requirements-dev.txt was run
 set -euo pipefail
 
-ME=`basename "$0"`
-ME_LOCATION=`dirname "$0"`
-ROOT_DIR="$(realpath "$ME_LOCATION/..")"
+ROOT_DIR="$(realpath "$(dirname "$0")"/..)"
 PYTHON_VERSION=$(cat "$ROOT_DIR/.python-version")
 BRANCHES_VERSION=$(PYTHONPATH="$ROOT_DIR/src" python -c "from branches import VERSION; print(VERSION)")
 

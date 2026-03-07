@@ -49,6 +49,7 @@ For each branch, `branches` outputs information that is usaully handy to have:
 
 - Whether this branch is in `origin` or not
 - If the branch is in `origin`, is it in sync or something needs to be pulled or pushed?
+- If the branch is in `origin`, what is the `relationship` between the two? is remote ahead (`>`), behind (`<`), or deviated (`Y`)?
 - If the branch is in `origin`, a handy link to the changes in github
 - Whether there's commits authored by someone else other than the current git user
 - Branch's last commit authored age in days
