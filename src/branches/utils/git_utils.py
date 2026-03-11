@@ -108,16 +108,12 @@ class GitUtils:
   def local_commit_from_branch(self, branch: str) -> Commit:
     return self._repo.branches[branch].commit
 
-  def local_commit_from_sha(self, sha):
-    ret = None
-
+  def local_commit_from_sha(self, sha) -> Commit | None:
     try:
-      ret = self._repo.commit(sha)
+      return self._repo.commit(sha)
     except ValueError:
       # Sha doesn't exist locally. Ignore and return None
-      pass
-
-    return ret
+      return None
 
   def local_commit(self) -> Commit:
     return self._repo.head.commit
@@ -126,9 +122,15 @@ class GitUtils:
     """Returns the sha of HEAD"""
     return str(self.local_commit())
 
-  def fetch_sigle_sha(self, sha):
-    self._repo.remotes.origin.fetch(sha)
-    return self.local_commit_from_sha(sha)
+  def fetch_single_sha(self, sha: str) -> Commit | None:
+    if not sha:
+      return None
+
+    ret = self.local_commit_from_sha(sha)
+    if not ret:
+      self._repo.remotes.origin.fetch(sha)
+      ret = self.local_commit_from_sha(sha)
+    return ret
 
   def is_ancestor(self, older_commit: Commit, newer_commit: Commit) -> bool | None:
     """
@@ -142,8 +144,11 @@ class GitUtils:
     except BadName, git.exc.GitCommandError:
       return None
 
-  def remote_shas(self, branches) -> dict[str, str]:
+  def remote_shas(self, branches: str | list[str]) -> dict[str, str]:
     ret = {}
+
+    if isinstance(branches, str):
+      branches = branches.splitlines()
 
     try:
       ls_remote_output = self._cmd.execute(["git", "ls-remote", "origin", *branches])

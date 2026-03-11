@@ -226,6 +226,7 @@ def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> 
   }
 
   main_branch = git_utils.main_branch()
+  main_sha = git_utils.local_sha_from_branch(main_branch)
   all_branches = git_utils.branches()
 
   ret["main_branch"] = main_branch
@@ -261,7 +262,7 @@ def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> 
   for branch in ret["branches"]:
     base_branch = base_branches.get(branch, (None, None))[0]
     row_dict = table_row(
-      branch, git_utils, remote_shas, base_branch, branch_distances, ret, show_warnings
+      branch, git_utils, remote_shas, base_branch, branch_distances, main_sha, ret, show_warnings
     )
     show_warnings = False
     table.add_row(*[row_dict.get(column_key) for column_key in COLUMNS.keys()])
@@ -275,6 +276,7 @@ def table_row(
   remote_shas: dict[StrBranchName, StrSha],
   base_branch: StrBranchName | None,
   branch_distances: dict[StrBranchName, list[int]],
+  main_sha: StrSha,
   ret: DictUpdateParams,
   show_warnings: bool,
 ) -> DictTableRow:
@@ -323,7 +325,7 @@ def table_row(
       sync_status = "unsynced"
       remote_commit = git_utils.local_commit_from_sha(remote_sha)
       if remote_commit is None:
-        remote_commit = git_utils.fetch_sigle_sha(remote_sha)
+        remote_commit = git_utils.fetch_single_sha(remote_sha)
 
   try:
     pr = None
@@ -391,10 +393,27 @@ def table_row(
 
   if sync_status in ["synced", "unsynced"] and branch != ret["main_branch"]:
     owner, repo = git_utils.owner_and_repo()
-    url = f"https://github.com/{owner}/{repo}/compare/{ret['main_branch']}...{branch}"
+    url = f"https://github.com/{owner}/{repo}/tree/{branch}"
     message_remote_sha = f"[link={url}]{message_remote_sha}[/link]"
     for sha in git_utils.shas_ahead_of(ret["main_branch"], remote_sha):
       remote_author_emails.add(git_utils.commit_author_email(sha))
+
+  ahead, behind = branch_distances[branch]
+  row_dict["ahead"] = str(ahead)
+  row_dict["behind"] = str(behind)
+  if (
+    sync_status in ["synced"]
+    and branch != ret["main_branch"]
+    and ret["main_branch"] in remote_shas
+    and remote_shas[ret["main_branch"]] == main_sha
+  ):
+    if ahead > 0:
+      url = f"https://github.com/{owner}/{repo}/compare/{ret['main_branch']}...{branch}"
+      row_dict["ahead"] = f"[link={url}]{row_dict['ahead']}[/link]"
+
+    if behind > 0:
+      url = f"https://github.com/{owner}/{repo}/compare/{branch}...{ret['main_branch']}"
+      row_dict["behind"] = f"[link={url}]{row_dict['behind']}[/link]"
 
   has_different_author = False
 
@@ -418,14 +437,11 @@ def table_row(
   if sync_status == "synced" and not has_different_author:
     ret["branches_safe_to_push"].append(branch)
 
-  ahead, behind = branch_distances[branch]
   row_dict["base"] = base_branch
   row_dict["origin"] = message_remote_sha
   row_dict["local"] = message_local_sha
   row_dict["age"] = str((datetime.now(timezone.utc) - git_utils.date_authored(local_sha)).days)
   row_dict["branch"] = branch
-  row_dict["ahead"] = str(ahead)
-  row_dict["behind"] = str(behind)
 
   if branch == git_utils.current_branch():
     row_dict["branch"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['branch']}[/{CURRENT_BRANCH_COLOR}]"
