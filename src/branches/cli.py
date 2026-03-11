@@ -325,9 +325,6 @@ def table_row(
       if remote_commit is None:
         remote_commit = git_utils.fetch_sigle_sha(remote_sha)
 
-      if branch == ret["main_branch"]:
-        ret["unsynced_main"] = True
-
   try:
     pr = None
     if "GITHUB_TOKEN" in os.environ:
@@ -385,6 +382,8 @@ def table_row(
       row_dict["relationship"] = "<"
     elif git_utils.is_ancestor(local_commit, remote_commit):
       row_dict["relationship"] = ">"
+      if branch == ret["main_branch"]:
+        ret["unsynced_main"] = True
     else:
       row_dict["relationship"] = "[yellow]Y[/yellow]"
   else:

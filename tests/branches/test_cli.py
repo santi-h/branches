@@ -617,7 +617,6 @@ def test_cli_misc():
   )
 
   # When the local `main` is ahead and the remote sha is an ancestor
-  # This shows an undesired behavior of this tool - we shouldn't try to pull in this scenario
   run_test(
     " && ".join(
       [
@@ -633,9 +632,6 @@ def test_cli_misc():
       r" ──────────────────────────────────────── ",
       r"  \w{5} < \w{5}    0  0 0  main           ",
       r"                                          ",
-      r"git checkout main && git pull && \\",
-      r"git checkout main",
-      r"",
     ],
   )
 
@@ -656,7 +652,6 @@ def test_cli_misc():
   )
 
   # When the remote `main` and local `main` deviated
-  # This shows an undesired behavior of this tool - we shouldn't try to pull in this scenario
   run_test(
     " && ".join(
       [
@@ -671,9 +666,6 @@ def test_cli_misc():
       r" ──────────────────────────────────────── ",
       r"  \w{5} Y \w{5}    0  0 0  main           ",
       r"                                          ",
-      r"git checkout main && git pull && \\",
-      r"git checkout main",
-      r"",
     ],
   )
 
