@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/santi-h/branches/actions/workflows/ci.yml/badge.svg)](https://github.com/santi-h/branches/actions/workflows/ci.yml?query=branch%3Amain)
 
-![screenshot](/docs/branches_screenshot.png)
+![screenshot](/docs/branches.gif)
 
 This tool is useful if you prefer rebasing over merging and use GitHub.
 

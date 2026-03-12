@@ -18,6 +18,7 @@ import re
 from typing import TypeAlias
 from pydash import get
 import copy
+from textwrap import dedent
 
 # Using some TypeAliases just for readability / documentation
 StrBranchName: TypeAlias = str
@@ -98,7 +99,43 @@ class GitHubApiError(Exception):
 
 def main() -> int:
   """Entry point for the CLI."""
-  parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser = argparse.ArgumentParser(
+    prog="branches",
+    formatter_class=argparse.RawTextHelpFormatter,
+    description=dedent("""\
+      A tool to manage git branches
+
+      This tool displays a table of local git branches with their status relative to
+      the main branch and their remote counterparts. It also suggests commands to
+      keep branches up-to-date. These are "udpate commands". You decide whether to
+      run them or not. The tool will never execute any write commands on its own
+      unless you use the -y flag or you agree at the prompt. You shouldn't blindly
+      run git commands. Always read them first.
+
+      This tool also supports operations. The only operation available at the moment
+      is "amend". Run `branches amend -h` for more information.
+    """),
+    epilog=dedent("""\
+      The table displays the following information:
+      - Origin: SHA of the branch on the remote. Links to the GitHub compare page.
+      - Local: SHA of the local branch.
+      - Age: Age of the branch in days since last commit.
+      - <-: Number of commits the branch is behind the main branch.
+      - ->: Number of commits the branch is ahead of the main branch.
+      - Branch: Name of the branch.
+      - Base: Base branch that this branch is based on.
+      - PR: Status of the associated Pull Request on GitHub, if any.
+
+      For PR information, a GITHUB_TOKEN environment variable with repo access is
+      required.
+
+      Example usage:
+        branches
+        branches -s
+        branches -s -q
+    """),
+  )
+
   parser.add_argument(
     "--no-push", action="store_true", default=False, help="Do not suggest push commands"
   )
@@ -129,11 +166,39 @@ def main() -> int:
     help="Automatically run update commands. THIS IS DANGEROUS!",
   )
 
-  group = parser.add_mutually_exclusive_group()
-  group.add_argument("operation", nargs="?", choices=["amend"], help="Operation")
-  group.add_argument(
+  parser.add_argument(
     "-s", "--short", action="store_true", default=False, help="Show a short list only"
   )
+
+  parser.add_argument("operation", nargs="?", choices=["amend"], help="Operation")
+
+  # subparser = parser.add_subparsers(
+  #   dest="operation",
+  #   metavar="operation",
+  # )
+
+  # subparser.add_parser(
+  #   "amend",
+  #   formatter_class=argparse.RawTextHelpFormatter,
+  #   help="Amend operation. More info with `branches amend -h`.",
+  #   description=dedent("""\
+  #     Amend operation
+
+  #     This operation gives you "update commands" that you can run to amend the last
+  #     commit of a branch and ensure all dependant branches also receive this update,
+  #     keeping the commit tree structure intact.
+  #   """),
+  #   epilog=dedent("""\
+  #     When using the "amend" operation, the tool generates "update commands" to:
+  #     - Update the last commit with new, unstaged, and staged changes.
+  #     - Rebase all branches that depend on this commit
+  #     - Force-push branches after rebasing if they were in sync with origin before
+  #       the rebase and there's no other authors.
+
+  #     Example usage:
+  #       branches amend
+  #   """),
+  # )
 
   ret = 1
   try:
