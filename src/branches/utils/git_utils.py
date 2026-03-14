@@ -16,7 +16,7 @@ class GitUtils:
 
     while True:
       try:
-        ret = git.Repo(repo_path)
+        ret = git.Repo(repo_path, search_parent_directories=True)
         break
       except git.exc.InvalidGitRepositoryError:
         if len(repo_path) > 1:
@@ -42,6 +42,9 @@ class GitUtils:
     self._current_branch = None
     self._owner_name = None
     self._repo_name = None
+
+  def working_tree_dir(self) -> str:
+    return str(self._repo.working_tree_dir or "")
 
   def owner_and_repo(self):
     if self._owner_name and self._repo_name:
