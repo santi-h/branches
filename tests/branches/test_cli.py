@@ -38,6 +38,7 @@ def run_test(
   expected_returncode=0,
   cleanup_command: str | None = None,
   github_domain: str | None = None,
+  trigger_command_dir: str | None = None,
 ):
   if len(prep_command or "") > 0:
     result = run_command(prep_command)
@@ -55,8 +56,13 @@ def run_test(
 
   envars = " ".join(envars)
   print(envars)
+  command = [f"cd '{GIT_TMP_DIRPATH_LOCAL}'"]
+  if trigger_command_dir:
+    command.append(f"cd {trigger_command_dir}")
+  command.append(f"{envars} python -m {trigger_command}")
+
   result = subprocess.run(
-    f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {envars} python -m {trigger_command}",
+    " && ".join(command),
     shell=True,
     capture_output=True,
     text=True,
@@ -363,7 +369,7 @@ def test_cli_misc():
       r"          \w{5}    0  3 6  branch5  branch3      ",
       r"          \w{5}    0  3 2  branch10 branch1      ",
       r"                                                 ",
-      r"git add . && git commit --amend --no-edit && \\",
+      f"git add {GIT_TMP_DIRPATH_LOCAL} && git commit --amend --no-edit && \\\\",
       r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
       r"git checkout branch4 && git reset --hard branch3 && \\",
       r"git checkout branch6 && git rebase --onto branch3 branch6~1 && \\",
@@ -418,7 +424,7 @@ def test_cli_misc():
       r"          \w{5}    0  3 5  branch6  branch3      ",
       r"          \w{5}    0  3 6  branch5  branch3      ",
       r"                                                 ",
-      r"git add . && git commit --amend --no-edit && \\",
+      f"git add {GIT_TMP_DIRPATH_LOCAL} && git commit --amend --no-edit && \\\\",
       r"git checkout branch10 && git reset --hard branch1 && \\",
       r"git checkout branch1",
       r"",
@@ -493,7 +499,7 @@ def test_cli_misc():
       r"          \w{5}    0  0 0  main            ",
       r"          \w{5}    0  2 1  branch9         ",
       r"                                           ",
-      r"git add . && git commit --amend --no-edit",
+      f"git add {GIT_TMP_DIRPATH_LOCAL} && git commit --amend --no-edit",
       r"",
     ],
     cleanup_command="git reset HEAD && git checkout .",
@@ -808,7 +814,7 @@ def test_cli_amend():
       r"          \w{5}    0  0 1  branch1            ",
       r"          \w{5}    0  0 3  branch2 branch1    ",
       r"                                              ",
-      r"git add . && git commit --amend --no-edit && \\",
+      f"git add {GIT_TMP_DIRPATH_LOCAL} && git commit --amend --no-edit && \\\\",
       r"git checkout branch2 && git rebase --onto branch1 branch2~2 && \\",
       r"git checkout branch1",
       r"",
@@ -884,7 +890,7 @@ def test_cli_amend():
       r"  \w{5}   \w{5}    0  0 1  branch1            ",
       r"          \w{5}    0  0 3  branch2 branch1    ",
       r"                                              ",
-      r"git add . && git commit --amend --no-edit && git push -f && \\",
+      f"git add {GIT_TMP_DIRPATH_LOCAL} && git commit --amend --no-edit && git push -f && \\\\",
       r"git checkout branch2 && git rebase --onto branch1 branch2~2 && \\",
       r"git checkout branch1",
       r"",
@@ -952,7 +958,97 @@ def test_cli_amend():
       r"          \w{5}    0  0 0  main            ",
       r"  \w{5}   \w{5}    0  0 1  branch1         ",
       r"                                           ",
-      r"git add . && git commit --amend --no-edit && git push -f",
+      f"git add {GIT_TMP_DIRPATH_LOCAL} && git commit --amend --no-edit && git push -f",
       r"",
     ],
+  )
+
+
+def test_subdir():
+  #     D     <- branch2
+  #    /
+  #   C       <- branch1
+  #  /
+  # A---B     <- main
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+  tformat = "%Y-%m-%dT%H:%M:%S%z"
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        "echo 'A.txt' > A.txt && git add .",
+        f"git commit -m 'A.txt' --date='{(now + sec * 1).strftime(tformat)}'",
+        "echo 'B.txt' > B.txt && git add .",
+        f"git commit -m 'B.txt' --date='{(now + sec * 2).strftime(tformat)}'",
+        "git checkout -b branch1",
+        "mkdir ./subdir",
+        "echo 'subdir/C.txt' > subdir/C.txt && git add .",
+        f"git commit -m 'subdir/C.txt' --date='{(now + sec * 3).strftime(tformat)}'",
+        "git checkout -b branch2",
+        "echo 'D.txt' > D.txt && git add .",
+        f"git commit -m 'D.txt' --date='{(now + sec * 4).strftime(tformat)}'",
+        "git checkout branch1",
+      ]
+    ),
+    "branches",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main               ",
+      r"          \w{5}    0  0 1  branch1            ",
+      r"          \w{5}    0  0 2  branch2 branch1    ",
+      r"                                              ",
+    ],
+    expected_returncode=0,
+  )
+
+  run_test(
+    "echo 'newline' >> A.txt",
+    "branches amend",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main               ",
+      r"          \w{5}    0  0 1  branch1            ",
+      r"          \w{5}    0  0 2  branch2 branch1    ",
+      r"                                              ",
+      f"git add {GIT_TMP_DIRPATH_LOCAL} && git commit --amend --no-edit && \\\\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+    expected_returncode=0,
+    trigger_command_dir="subdir",
+  )
+
+  run_test(
+    "echo 'newline' >> A.txt",
+    "branches amend -y",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main               ",
+      r"          \w{5}    0  0 1  branch1            ",
+      r"          \w{5}    0  0 2  branch2 branch1    ",
+      r"                                              ",
+      f"git add {GIT_TMP_DIRPATH_LOCAL} && git commit --amend --no-edit && \\\\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch1",
+      r"",
+      r"\[branch1 \w{7}\] subdir/C.txt",
+      r" Date: .*",
+      r" 2 files changed, 3 insertions\(\+\)",
+      r" create mode 100644 subdir/C.txt",
+      r"Switched to branch 'branch2'",
+      r"Rebasing \(1/1\)",
+      r"Successfully rebased and updated refs/heads/branch2.",
+      r"Switched to branch 'branch1'",
+    ],
+    expected_returncode=0,
+    trigger_command_dir="subdir",
   )
