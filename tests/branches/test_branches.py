@@ -339,7 +339,7 @@ def test_generate_amend_commands():
       (
         None,
         [
-          "git add /mocked/path && git commit --amend --no-edit",
+          "git add -A && git commit --amend --no-edit",
           "git checkout branch3 && git rebase --onto branch2 branch3~1",
           "git checkout branch4 && git reset --hard branch3",
           "git checkout branch6 && git rebase --onto branch3 branch6~1",
@@ -364,15 +364,9 @@ def test_generate_amend_commands():
         "branches_with_merge_commits": [],
         "branches_safe_to_push": [],
       },
-      (None, ["git add /mocked/path && git commit --amend --no-edit"]),
+      (None, ["git add -A && git commit --amend --no-edit"]),
     ],
   ]
 
-  class GitUtilsMock:
-    def working_tree_dir(self):
-      return "/mocked/path"
-
-  mock_git_utils = GitUtilsMock()
-
   for test_case in test_cases:
-    assert generate_amend_commands(mock_git_utils, **test_case[0]) == test_case[1]
+    assert generate_amend_commands(**test_case[0]) == test_case[1]

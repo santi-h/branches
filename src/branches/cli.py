@@ -187,7 +187,7 @@ def branches(args: argparse.Namespace) -> int:
       print("No changes to amend with.\n")
       return 1
 
-    err, update_commands = generate_amend_commands(git_utils, **update_commands_params)
+    err, update_commands = generate_amend_commands(**update_commands_params)
     if len(err or "") > 0:
       print(err)
       return 1
@@ -520,7 +520,6 @@ def local_branches_order(
 
 
 def generate_amend_commands(
-  git_utils: GitUtils,
   current_branch: StrBranchName,
   no_push: bool,
   branches_deletable: list[StrBranchName],
@@ -551,7 +550,7 @@ def generate_amend_commands(
   if set(branches_with_merge_commits) & set(relevant_branches_ahead_shas.keys()):
     return ("Tool limitation: cannot amend or update branches with merge commits.", None)
 
-  amend_commands = [f"git add {git_utils.working_tree_dir()} && git commit --amend --no-edit"]
+  amend_commands = ["git add -A && git commit --amend --no-edit"]
 
   if current_branch in branches_safe_to_push:
     amend_commands[0] += " && git push -f"
