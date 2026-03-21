@@ -9,6 +9,7 @@ from subprocess import CompletedProcess
 import re
 from datetime import datetime, timezone, timedelta
 import json
+from pytest_httpserver.httpserver import HTTPServer
 
 GIT_TMP_DIRPATH_LOCAL = os.path.join(os.path.dirname(__file__), "test_cli_local")
 GIT_TMP_DIRPATH_ORIGIN = os.path.join(os.path.dirname(__file__), "test_cli_origin")
@@ -37,7 +38,7 @@ def run_test(
   expected_stdout: str | list[str],
   expected_returncode=0,
   cleanup_command: str | None = None,
-  github_domain: str | None = None,
+  httpserver: HTTPServer | None = None,
   trigger_command_dir: str | None = None,
 ):
   if len(prep_command or "") > 0:
@@ -47,10 +48,10 @@ def run_test(
     )
 
   envars = [f"PYTHONPATH='{SRC_DIRPATH}'"]
-  if github_domain is not None:
+  if httpserver is not None:
     envars += [
       "GITHUB_PROTO='http'",
-      f"GITHUB_DOMAIN='{github_domain}'",
+      f"GITHUB_DOMAIN='{httpserver.host}:{httpserver.port}'",
       "GITHUB_TOKEN='testtoken'",
     ]
 
@@ -101,6 +102,28 @@ def run_test(
     subprocess.run(f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {cleanup_command}", shell=True)
 
 
+def commit(name: str, date: datetime | None = None, author: str | None = None) -> str:
+  ret = f"echo '{name}.txt' > {name}.txt && git add -A && git commit -m '{name}.txt'"
+
+  if date:
+    tformat = "%Y-%m-%dT%H:%M:%S%z"
+    ret += f" --date='{date.strftime(tformat)}'"
+
+  if author:
+    ret += f" --author='{author}'"
+
+  return ret
+
+
+def set_mockserver_expectations(httpserver, github_requests_expected):
+  for expected_branch, expected_payload in github_requests_expected:
+    httpserver.expect_ordered_request(
+      "/repos/branches/test_cli_origin/pulls",
+      method="GET",
+      query_string={"head": f"branches:{expected_branch}", "state": "all"},
+    ).respond_with_json(expected_payload, status=200)
+
+
 def test_mockserver(httpserver):
   #       C     <- branch1
   #      /
@@ -109,30 +132,27 @@ def test_mockserver(httpserver):
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
-  github_requests_expected = [
-    (
-      "main",
-      [],
-    ),
-    (
-      "branch1",
-      [
-        {
-          "number": 123,
-          "title": "Fix thing",
-          "head": {"sha": "5259dcf3e0e9b774689f5fb761e07d25f6683fd5"},
-          "html_url": "http://localhost/branches/test_cli_origin/pull/123",
-          "user": {"login": "santi-h"},
-        }
-      ],
-    ),
-  ]
-  for expected_branch, expected_payload in github_requests_expected:
-    httpserver.expect_ordered_request(
-      "/repos/branches/test_cli_origin/pulls",
-      method="GET",
-      query_string={"head": f"branches:{expected_branch}", "state": "all"},
-    ).respond_with_json(expected_payload, status=200)
+  set_mockserver_expectations(
+    httpserver,
+    [
+      (
+        "main",
+        [],
+      ),
+      (
+        "branch1",
+        [
+          {
+            "number": 123,
+            "title": "Fix thing",
+            "head": {"sha": "5259dcf3e0e9b774689f5fb761e07d25f6683fd5"},
+            "html_url": "http://localhost/branches/test_cli_origin/pull/123",
+            "user": {"login": "santi-h"},
+          }
+        ],
+      ),
+    ],
+  )
 
   run_test(
     f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN} && "
@@ -158,36 +178,33 @@ def test_mockserver(httpserver):
       r"git checkout main",
       r"",
     ],
-    github_domain=httpserver.host + ":" + str(httpserver.port),
+    httpserver=httpserver,
   )
 
-  # If the PR is merged and the head sha of the PR is exactly the same as the local sha, suggest
+  # If the PR is merged and the HEAD sha of the PR is exactly the same as the local sha, suggest
   # deletion.
-  github_requests_expected = [
-    (
-      "main",
-      [],
-    ),
-    (
-      "branch1",
-      [
-        {
-          "number": 123,
-          "title": "Fix thing",
-          "head": {"sha": run_command("git rev-parse branch1").stdout.strip()},
-          "html_url": "http://localhost/branches/test_cli_origin/pull/123",
-          "user": {"login": "santi-h"},
-          "merged_at": "2026-02-14T16:31:13Z",
-        }
-      ],
-    ),
-  ]
-  for expected_branch, expected_payload in github_requests_expected:
-    httpserver.expect_ordered_request(
-      "/repos/branches/test_cli_origin/pulls",
-      method="GET",
-      query_string={"head": f"branches:{expected_branch}", "state": "all"},
-    ).respond_with_json(expected_payload, status=200)
+  set_mockserver_expectations(
+    httpserver,
+    [
+      (
+        "main",
+        [],
+      ),
+      (
+        "branch1",
+        [
+          {
+            "number": 123,
+            "title": "Fix thing",
+            "head": {"sha": run_command("git rev-parse branch1").stdout.strip()},
+            "html_url": "http://localhost/branches/test_cli_origin/pull/123",
+            "user": {"login": "santi-h"},
+            "merged_at": "2026-02-14T16:31:13Z",
+          }
+        ],
+      ),
+    ],
+  )
 
   run_test(
     "git checkout branch1",
@@ -204,7 +221,135 @@ def test_mockserver(httpserver):
       r"git checkout main",
       r"",
     ],
-    github_domain=httpserver.host + ":" + str(httpserver.port),
+    httpserver=httpserver,
+  )
+
+
+def test_merged_base(httpserver: HTTPServer):
+  """
+  #     C <- branch2
+  #    /
+  #   B   <- branch1
+  #  /
+  # A---D <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        "git checkout -b branch1",
+        commit("B", now + sec * 2),
+        "git checkout -b branch2",
+        commit("C", now + sec * 3),
+        "git checkout main",
+        commit("D", now + sec * 4),
+        "git push",
+      ]
+    ),
+    "branches",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main               ",
+      r"          \w{5}    0  1 2  branch2 branch1    ",
+      r"          \w{5}    0  1 1  branch1            ",
+      r"                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+  print(run_command("git rev-parse branch1").stdout.strip())
+
+  set_mockserver_expectations(
+    httpserver,
+    [
+      ("main", []),
+      ("branch2", []),
+      (
+        "branch1",
+        [
+          {
+            "state": "closed",
+            "merged_at": "2026-02-18T16:46:11Z",
+            "number": 123,
+            "title": "Fix thing",
+            "head": {"sha": run_command("git rev-parse branch1").stdout.strip()},
+            "html_url": "http://localhost/branches/test_cli_origin/pull/123",
+            "user": {"login": "santi-h"},
+          }
+        ],
+      ),
+    ],
+  )
+
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                   ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                      ",
+      r" ───────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                                    ",
+      r"          \w{5}    0  1 2  branch2 branch1                         ",
+      r"          \w{5}    0  1 1  branch1         #123 \(\w{5}\) by santi-h ",
+      r"                                                                   ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git checkout branch2 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+  set_mockserver_expectations(
+    httpserver,
+    [
+      ("main", []),
+      ("branch2", []),
+      (
+        "branch1",
+        [
+          {
+            "state": "closed",
+            "merged_at": "2026-02-18T16:46:11Z",
+            "number": 123,
+            "title": "Fix thing",
+            "head": {"sha": run_command("git rev-parse branch1").stdout.strip()},
+            "html_url": "http://localhost/branches/test_cli_origin/pull/123",
+            "user": {"login": "santi-h"},
+          }
+        ],
+      ),
+    ],
+  )
+
+  run_test(
+    "git checkout branch2",
+    "branches",
+    [
+      r"                                                                   ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                      ",
+      r" ───────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                                    ",
+      r"          \w{5}    0  1 2  branch2 branch1                         ",
+      r"          \w{5}    0  1 1  branch1         #123 \(\w{5}\) by santi-h ",
+      r"                                                                   ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git checkout branch2 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
   )
 
 
@@ -628,7 +773,7 @@ def test_cli_misc():
       [
         "git push",
         "echo test >> Q.txt && git add Q.txt",
-        f"git commit -m 'Q' --date='{(now + sec * 17).strftime(tformat)}'",
+        f"git commit -m 'Q' --date='{(now + sec * 17).strftime(tformat)}' --author='Name <me@git.com>'",
       ]
     ),
     "branches -s",
@@ -672,6 +817,93 @@ def test_cli_misc():
       r" ──────────────────────────────────────── ",
       r"  \w{5} Y \w{5}    0  0 0  main           ",
       r"                                          ",
+    ],
+  )
+
+
+def test_misc1():
+  """
+  Description:
+    Tests what happens when the branch origin diverted, and local is behind.
+
+  Setup:
+
+      C    <- origin/branch1
+     /
+    | D    <- branch1
+    |/
+    A---B  <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 HEAD~1",
+        commit("C", now + sec * 3),
+        "git push",
+        "git reset --hard HEAD~1",
+        commit("D", now + sec * 4),
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main            ",
+      r"  \w{5} Y \w{5}    0  1 1  branch1         ",
+      r"                                           ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_misc2():
+  """
+  Description:
+    Tests what happens when the branch origin diverted, and local is caught up and ahead.
+
+  Setup:
+
+      C      <- origin/branch1
+     /
+    |     D  <- branch1
+    |    /
+    A---B    <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 HEAD~1",
+        commit("C", now + sec * 3),
+        "git push",
+        "git reset --hard main",
+        commit("D", now + sec * 4),
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main            ",
+      r"  \w{5} Y \w{5}    0  0 1  branch1         ",
+      r"                                           ",
     ],
   )
 
@@ -1051,4 +1283,532 @@ def test_subdir():
     ],
     expected_returncode=0,
     trigger_command_dir="subdir",
+  )
+
+
+def test_authors():
+  #   C       <- branch1
+  #  /
+  # A---B     <- main
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+  tformat = "%Y-%m-%dT%H:%M:%S%z"
+
+  # Local branch has commits by a different author
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        "echo 'A.txt' > A.txt && git add .",
+        f"git commit -m 'A.txt' --date='{(now + sec * 1).strftime(tformat)}'",
+        "echo 'B.txt' > B.txt && git add .",
+        f"git commit -m 'B.txt' --date='{(now + sec * 2).strftime(tformat)}'",
+        "git checkout -b branch1",
+        "echo 'C.txt' > C.txt && git add .",
+        f"git commit -m 'C.txt' --date='{(now + sec * 3).strftime(tformat)}' --author='Name <me@git.com>'",
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main            ",
+      r"          \w{5}!   0  0 1  branch1         ",
+      r"                                           ",
+    ],
+    expected_returncode=0,
+  )
+
+  # Remote and local branch have commits by a different author
+  run_test(
+    "git push",
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main            ",
+      r" !\w{5}   \w{5}!   0  0 1  branch1         ",
+      r"                                           ",
+    ],
+    expected_returncode=0,
+  )
+
+  # Remote branch has commits by a different author
+  git_name = run_command("git config --get user.name").stdout.strip()
+  git_email = run_command("git config --get user.email").stdout.strip()
+  run_test(
+    f"git commit --amend --author='{git_name} <{git_email}>' --no-edit",
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main            ",
+      r" !\w{5} Y \w{5}    0  0 1  branch1         ",
+      r"                                           ",
+    ],
+    expected_returncode=0,
+  )
+
+
+def test_pulls1():
+  """
+        E   <- origin/branch2, branch3, origin/branch3
+       /
+      D     <- origin/branch1, branch2
+     /
+    C       <- branch1
+   /
+  A---B     <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 HEAD~1",
+        commit("C", now + sec * 3),
+        commit("D", now + sec * 4),
+        "git push",
+        "git checkout -b branch2",
+        commit("E", now + sec * 5),
+        "git checkout -b branch3 && git push",
+        "git checkout branch2 && git push && git reset --hard HEAD~1",
+        "git checkout branch1 && git reset --hard HEAD~1",
+      ]
+    ),
+    "branches",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main               ",
+      r"  \w{5} > \w{5}    0  1 1  branch1            ",
+      r"  \w{5}   \w{5}    0  1 3  branch3 branch2    ",
+      r"  \w{5} > \w{5}    0  1 2  branch2 branch1    ",
+      r"                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_pulls2():
+  """
+        E   <- branch3, origin/branch3
+       /
+      D     <- origin/branch1, origin/branch2, branch2
+     /
+    C       <- branch1
+   /
+  A---B     <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 HEAD~1",
+        commit("C", now + sec * 3),
+        commit("D", now + sec * 4),
+        "git push",
+        "git checkout -b branch2 && git push",
+        "git checkout -b branch3",
+        commit("E", now + sec * 5),
+        "git push",
+        "git checkout branch1 && git reset --hard HEAD~1",
+      ]
+    ),
+    "branches",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main               ",
+      r"  \w{5} > \w{5}    0  1 1  branch1            ",
+      r"  \w{5}   \w{5}    0  1 3  branch3 branch2    ",
+      r"  \w{5}   \w{5}    0  1 2  branch2 branch1    ",
+      r"                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && git push -f && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_pulls3():
+  """
+        E   <- branch3, origin/branch3, origin/branch1
+       /
+      D     <- origin/branch2, branch2
+     /
+    C       <- branch1
+   /
+  A---B     <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 HEAD~1",
+        commit("C", now + sec * 3),
+        commit("D", now + sec * 4),
+        commit("E", now + sec * 5),
+        "git push",
+        "git checkout -b branch3 && git push",
+        "git checkout -b branch2 HEAD~1 && git push",
+        "git checkout branch1 && git reset --hard HEAD~2",
+      ]
+    ),
+    "branches",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main               ",
+      r"  \w{5} > \w{5}    0  1 1  branch1            ",
+      r"  \w{5}   \w{5}    0  1 3  branch3 branch2    ",
+      r"  \w{5}   \w{5}    0  1 2  branch2 branch1    ",
+      r"                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && git push -f && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_pulls4():
+  """
+        C    <- origin/main, origin/branch1
+       /
+  A---B     <- main, branch1
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        commit("C", now + sec * 3),
+        "git push",
+        "git checkout -b branch1 && git push && git reset --hard HEAD~1",
+        "git checkout main && git reset --hard HEAD~1",
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main            ",
+      r"  \w{5} > \w{5}    0  0 0  branch1         ",
+      r"                                           ",
+      r"git checkout main && git pull && \\",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_pulls5():
+  """
+          D  <- origin/branch1
+         /
+        C    <- origin/main
+       /
+  A---B      <- main, branch1
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        commit("C", now + sec * 3),
+        "git push",
+        commit("D", now + sec * 4),
+        "git checkout -b branch1 && git push && git reset --hard HEAD~2",
+        "git checkout main && git reset --hard HEAD~2",
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main            ",
+      r"  \w{5} > \w{5}    0  0 0  branch1         ",
+      r"                                           ",
+      r"git checkout main && git pull && \\",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_pulls6():
+  """
+          D  <- origin/main
+         /
+        C    <- origin/branch1
+       /
+  A---B      <- main, branch1
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        commit("C", now + sec * 3),
+        commit("D", now + sec * 4),
+        "git push",
+        "git checkout -b branch1 HEAD~1 && git push && git reset --hard HEAD~1",
+        "git checkout main && git reset --hard HEAD~2",
+      ]
+    ),
+    "branches",
+    [
+      # Undesired behavior
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main            ",
+      r"  \w{5} > \w{5}    0  0 0  branch1         ",
+      r"                                           ",
+      r"git checkout main && git pull && \\",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_pulls7():
+  """
+  Setup:
+
+        D  <- branch2, origin/branch1
+       /
+      C    <- branch1
+     /
+    A---B  <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 HEAD~1",
+        commit("C", now + sec * 3),
+        commit("D", now + sec * 4),
+        "git push",
+        "git checkout -b branch2",
+        "git checkout branch1 && git reset --hard HEAD~1",
+        "echo 'change' >> C.txt",
+      ]
+    ),
+    "branches amend",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main               ",
+      r"  \w{5} > \w{5}    0  1 1  branch1            ",
+      r"          \w{5}    0  1 2  branch2 branch1    ",
+      r"                                              ",
+      r"git add -A && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+  )
+
+
+def test_pulls8():
+  """
+  Description:
+    Tests what happens when the branch origin is ahead but has other authors. This current behavior
+    might be undesired. Probably not safe to rebase the local branch in this case automatically.
+    We should let the user manually handle this case. The fact that there is other authors in origin
+    might need to "pin" the local branch even if it's behind main.
+
+  Setup:
+
+        D  <- !origin/branch1
+       /
+      C    <- branch1
+     /
+    A---B  <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 HEAD~1",
+        commit("C", now + sec * 3),
+        commit("D", now + sec * 4, "Name <me@git.com>"),
+        "git push",
+        "git reset --hard HEAD~1",
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main            ",
+      r" !\w{5} > \w{5}    0  1 1  branch1         ",
+      r"                                           ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_pull_amend_base():
+  """
+        E   <- origin/branch2, branch3, origin/branch3
+       /
+      D     <- origin/branch1, branch2
+     /
+    C       <- branch1
+   /
+  A---B     <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 HEAD~1",
+        commit("C", now + sec * 3),
+        commit("D", now + sec * 4),
+        "git push",
+        "git checkout -b branch2",
+        commit("E", now + sec * 5),
+        "git checkout -b branch3 && git push",
+        "git checkout branch2 && git push && git reset --hard HEAD~1",
+        "git checkout branch1 && git reset --hard HEAD~1",
+        "echo 'change' >> C.txt",
+      ]
+    ),
+    "branches amend",
+    [
+      r"                                              ",
+      r" Origin - Local  Age <- -> Branch  Base    PR ",
+      r" ──────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main               ",
+      r"  \w{5} > \w{5}    0  1 1  branch1            ",
+      r"  \w{5} > \w{5}    0  1 2  branch2 branch1    ",
+      r"  \w{5}   \w{5}    0  1 3  branch3 branch2    ",
+      r"                                              ",
+      r"git add -A && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+  )
+
+
+def test_no_main():
+  """
+  Description:
+    Tests what happens when there is no main branch and no origin
+
+  Setup:
+
+    A---B  <- branch1
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        "git init && git checkout -b branch1",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  branch1         ",
+      r"                                           ",
+    ],
+  )
+
+  run_test(
+    " && ".join(
+      [
+        "git checkout -b branch2",
+        commit("C", now + sec * 3),
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  branch1         ",
+      r"          \w{5}    0  0 1  branch2         ",
+      r"                                           ",
+    ],
   )

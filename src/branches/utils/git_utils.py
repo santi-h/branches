@@ -109,7 +109,7 @@ class GitUtils:
     return str(self.local_commit_from_branch(branch))
 
   def local_commit_from_branch(self, branch: str) -> Commit:
-    return self._repo.branches[branch].commit
+    return self._repo.commit(f"refs/heads/{branch}")
 
   def local_commit_from_sha(self, sha) -> Commit | None:
     try:
@@ -167,6 +167,11 @@ class GitUtils:
     return ret
 
   def distance(self, branch_from, branch_to) -> tuple[int, int]:
+    """Returns the distance between the two refs
+
+    First return number is how many commits branch_to is ahead of branch_from
+    Second return number is how many commits branch_to is behind of branch_from
+    """
     result = self._cmd.execute(
       ["git", "rev-list", "--left-right", "--count", f"{branch_from}...{branch_to}"]
     )
@@ -188,13 +193,17 @@ class GitUtils:
 
     return ret
 
-  def main_branch(self):
+  def main_branch(self) -> str:
     try:
       origin_ref = self._repo.refs["origin/HEAD"]
     except IndexError as exception:
       for branch in ["main", "release", "master"]:
         if branch in self._repo.branches:
           return branch
+
+      branches = self.branches()
+      if branches:
+        return branches[-1]
 
       raise exception
 
