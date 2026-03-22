@@ -1,5 +1,12 @@
 # Example usage:
 # python branches.py
+# TODO: look at this https://docs.google.com/spreadsheets/d/1Dq-iW77EEscXzQfMAfVoW3IqALG0g5230UZMgCPNSH4/edit?gid=31247323#gid=31247323
+# and implement only the scenarios where:
+# default origin = >
+# pr = N
+# origin/local authors = N
+# behind = N
+
 from . import VERSION
 import argparse
 from .utils.git_utils import GitUtils
@@ -15,8 +22,9 @@ from rich.live import Live
 from rich.table import Table
 from datetime import datetime, timezone
 import re
-import copy
 from typing import TypeAlias
+from pydash import get
+import copy
 
 # Using some TypeAliases just for readability / documentation
 StrBranchName: TypeAlias = str
@@ -162,12 +170,12 @@ def branches(args: argparse.Namespace) -> int:
     args.short = True
 
   with Live(table, console=console, refresh_per_second=20):
-    update_commands_params = print_table(args, table, git_utils)
+    db = print_table(args, table, git_utils)
 
   print("")
 
   if args.operation is None:
-    update_commands = generate_update_commands(**update_commands_params)
+    update_commands = generate_update_commands(db, git_utils, args.no_push)
   elif args.operation == "amend":
     if len(git_utils.current_branch() or "") <= 0:
       print("Cannot run amend on a detached HEAD. Check out a branch first.\n")
@@ -187,7 +195,7 @@ def branches(args: argparse.Namespace) -> int:
       print("No changes to amend with.\n")
       return 1
 
-    err, update_commands = generate_amend_commands(**update_commands_params)
+    err, update_commands = generate_amend_commands(db, git_utils, args.no_push)
     if len(err or "") > 0:
       print(err)
       return 1
@@ -206,78 +214,108 @@ def branches(args: argparse.Namespace) -> int:
   return ret
 
 
-def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> DictUpdateParams:
+def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> dict:
   """Prints out the state of all local branches in a table.
 
   Returns:
     A dict with the required arguments to generate update commands. The keys of this dict must be
     the arguments to the function that outputs the update commands.
   """
-  ret = {
-    "branches": None,
-    "main_branch": None,
-    "no_push": args.no_push,
-    "branches_deletable": [],
-    "unsynced_main": False,
-    "branches_behind": [],
-    "branches_ahead_shas": {},
-    "branches_with_merge_commits": [],
-    "branches_safe_to_push": [],
-  }
-
-  main_branch = git_utils.main_branch()
-  main_sha = git_utils.local_sha_from_branch(main_branch)
-  all_branches = git_utils.branches()
-
-  ret["main_branch"] = main_branch
-  ret["current_branch"] = git_utils.current_branch()
-
-  branch_distances = {}
-  for branch in all_branches:
-    branch_distances[branch] = git_utils.distance(branch, main_branch)
-
-    if branch == main_branch or branch_distances[branch][0] <= 0:
-      continue
-
-    for parents in git_utils.parent_shas_of_ref(branch, branch_distances[branch][0]):
-      if len(parents) > 2:
-        ret["branches_with_merge_commits"].append(branch)
-        break
-
-    if branch not in ret["branches_with_merge_commits"]:
-      ret["branches_ahead_shas"][branch] = [
-        sha[:5] for sha in git_utils.shas_ahead_of(main_branch, branch)
-      ]
-
-  base_branches = base_branches_from_branches_ahead_refs(
-    branches_ahead_shas_to_refs(ret["branches_ahead_shas"])
-  )
-
-  ret["branches"] = local_branches_order(
-    all_branches, main_branch, ret["current_branch"], base_branches, args.short
-  )
-
-  remote_shas = git_utils.remote_shas(ret["branches"])
+  db = create_db(git_utils, short=args.short)
   show_warnings = True
-  for branch in ret["branches"]:
-    base_branch = base_branches.get(branch, (None, None))[0]
-    row_dict = table_row(
-      branch, git_utils, remote_shas, base_branch, branch_distances, main_sha, ret, show_warnings
-    )
+  for branch in db["local"]:
+    row_dict = table_row(db, branch, git_utils, show_warnings)
     show_warnings = False
     table.add_row(*[row_dict.get(column_key) for column_key in COLUMNS.keys()])
 
-  return ret
+  return db
+
+
+def create_db(
+  git_utils: GitUtils,
+  default: str | None = None,
+  branches: list[str] | None = None,
+  ignore_behind: bool = False,
+  short=False,
+  remote: dict[StrBranchName, dict] = None,
+):
+  if not default:
+    default = git_utils.main_branch()
+
+  db = {
+    "email": git_utils.current_user_email(),
+    "default": default,
+    "current": git_utils.current_branch(),
+    "local": {},
+    "remote": {},
+  }
+
+  local: dict[str, dict] = {
+    default: {
+      "sha": git_utils.local_sha_from_branch(default),
+      "pr_status": None,
+      "pr_sha": None,
+      "distance_default": (0, 0),
+      "distance_base": (0, 0),
+      "base": default,
+      "has_merge_commits": False,
+      "shas_ahead_default": [],
+      "shas_ahead_default_other_authors": set(),
+      "default": True,
+    }
+  }
+
+  if branches is None:
+    branches = git_utils.branches()
+
+  for branch in branches:
+    if branch == default:
+      continue
+
+    distance_default = git_utils.distance(default, branch)
+    if ignore_behind and distance_default[0]:
+      continue
+
+    local[branch] = {
+      "sha": git_utils.local_sha_from_branch(branch),
+      "pr_status": None,  # one of [None, "open", "merged", "closed"]
+      "pr_sha": None,
+      "distance_default": distance_default,
+      "distance_base": distance_default,
+      "base": default,
+      "has_merge_commits": False,
+      "shas_ahead_default": [],
+      "shas_ahead_default_other_authors": set(),
+      "default": False,
+    }
+
+  refresh_distances(local, default, db["email"], git_utils)
+
+  for branch in local_branches_order(local, short, db["current"], db["default"]):
+    if branch not in db["local"]:
+      db["local"][branch] = local[branch]
+
+  if remote is None:
+    for branch, remote_sha in git_utils.remote_shas(list(db["local"].keys())).items():
+      db["remote"][branch] = construct_empty_remote(remote_sha)
+  else:
+    for branch in remote.keys() & db["local"].keys():
+      db["remote"][branch] = construct_remote(
+        remote[branch]["sha"],
+        db["email"],
+        branch,
+        default,
+        git_utils,
+        get(remote, [default, "sha"]),
+      )
+
+  return db
 
 
 def table_row(
+  db: dict,
   branch: StrBranchName,
   git_utils: GitUtils,
-  remote_shas: dict[StrBranchName, StrSha],
-  base_branch: StrBranchName | None,
-  branch_distances: dict[StrBranchName, list[int]],
-  main_sha: StrSha,
-  ret: DictUpdateParams,
   show_warnings: bool,
 ) -> DictTableRow:
   """Populates `ret` and returns a dictionary with `COLUMNS` values to add to the table
@@ -299,23 +337,18 @@ def table_row(
       commands.
   """
   row_dict = {}  # See `COLUMNS` for valid keys.
-
+  default = db["default"]
   sync_status = "not_pushed"  # means this branch is not in origin
   # 'synced'       means this branch is in origin and is the same as local
   # 'unsynced'     means this branch is in origin but is not the same as local
 
-  local_commit = git_utils.local_commit_from_branch(branch)
+  local_commit = git_utils.local_commit_from_sha(db["local"][branch]["sha"])
   local_sha = str(local_commit)
   local_sha_short = local_sha[:5]
-  local_author_emails: set[str] = set()
 
   remote_commit: Commit | None = None
-  remote_sha = remote_shas.get(branch)
+  remote_sha = get(db, ["remote", branch, "sha"])
   remote_sha_short = ""
-  remote_author_emails: set[str] = set()
-
-  for sha in git_utils.shas_ahead_of(ret["main_branch"], branch):
-    local_author_emails.add(git_utils.commit_author_email(sha))
 
   if remote_sha is not None:
     remote_sha_short = remote_sha[:5]
@@ -326,6 +359,8 @@ def table_row(
       remote_commit = git_utils.local_commit_from_sha(remote_sha)
       if remote_commit is None:
         remote_commit = git_utils.fetch_single_sha(remote_sha)
+
+    db["remote"][branch] = construct_remote(remote_sha, db["email"], branch, default, git_utils)
 
   try:
     pr = None
@@ -343,35 +378,36 @@ def table_row(
     if show_warnings:
       print(f"WARNING: {exception}")
 
-  if pr is not None and branch != ret["main_branch"]:
+  # TODO: only consider the PR if it's against the db["default"] ?
+  if pr is not None and branch != default:
     if pr.get("state") == "open":
       pr_status = "open"
-    elif len(pr.get("merged_at", "") or "") > 0:
+    elif pr.get("merged_at"):
       pr_status = "merged"
     else:
       pr_status = "closed"
 
-    pr_sha = f"{pr['head']['sha'][:5]}"
+    db["local"][branch]["pr_status"] = pr_status
+    db["local"][branch]["pr_sha"] = pr["head"]["sha"]
+
+    pr_short_sha = pr["head"]["sha"][:5]
     if pr["head"]["sha"] == local_sha:
-      pr_sha_status = "synced"
-      pr_sha = f"[{LOCAL_SHA_COLOR}]{pr_sha}[/{LOCAL_SHA_COLOR}]"
-    else:
-      pr_sha_status = "unsynced"
+      pr_short_sha = f"[{LOCAL_SHA_COLOR}]{pr_short_sha}[/{LOCAL_SHA_COLOR}]"
 
     row_dict["pr"] = (
       f"[link={pr['html_url']}][{PR_STATUS_COLORS[pr_status]}]#{pr['number']}"
-      f"[/{PR_STATUS_COLORS[pr_status]}][/link] ({pr_sha}) by "
-      f"{pr['user']['login']}"
+      f"[/{PR_STATUS_COLORS[pr_status]}][/link] ({pr_short_sha}) by " + pr["user"]["login"]
     )
 
-    if pr_status == "merged" and pr_sha_status == "synced" and sync_status == "not_pushed":
-      # Only delete if all of these are true:
-      # - This is not the main branch
-      # - The PR was merged
-      # - The merged code is exactly the same as our local branch
-      # - The branch was deleted in origin
-      ret["branches_deletable"].append(branch)
+    # if db["local"][branch]["pr_status"] == "merged" and db["local"][branch]["pr_sha"] == db["local"][branch]["sha"] and branch not in db["remote"]:
+    #   # Only delete if all of these are true:
+    #   # - This is not the main branch
+    #   # - The PR was merged
+    #   # - The merged code is exactly the same as our local branch
+    #   # - The branch was deleted in origin
+    #   ret["branches_deletable"].append(branch)
 
+  message_remote_sha = remote_sha_short
   if sync_status == "synced":
     message_remote_sha = f"[{LOCAL_SHA_COLOR}]{remote_sha_short}[/{LOCAL_SHA_COLOR}]"
   elif sync_status == "unsynced":
@@ -380,62 +416,52 @@ def table_row(
     else:
       message_remote_sha = f"[bold]{remote_sha_short}[/bold]"
 
-    if git_utils.is_ancestor(remote_commit, local_commit):
-      row_dict["relationship"] = "<"
-    elif git_utils.is_ancestor(local_commit, remote_commit):
-      row_dict["relationship"] = ">"
-      if branch == ret["main_branch"]:
-        ret["unsynced_main"] = True
-    else:
-      row_dict["relationship"] = "[yellow]Y[/yellow]"
-  else:
-    message_remote_sha = remote_sha_short  # should be empty
+    row_dict["relationship"] = db["remote"][branch]["relationship"]
+    if row_dict["relationship"] == "Y":
+      row_dict["relationship"] = "[yellow]" + row_dict["relationship"] + "[/yellow]"
 
-  if sync_status in ["synced", "unsynced"] and branch != ret["main_branch"]:
+  if sync_status in ["synced", "unsynced"] and branch != default:
     owner, repo = git_utils.owner_and_repo()
     url = f"https://github.com/{owner}/{repo}/tree/{branch}"
     message_remote_sha = f"[link={url}]{message_remote_sha}[/link]"
-    for sha in git_utils.shas_ahead_of(ret["main_branch"], remote_sha):
-      remote_author_emails.add(git_utils.commit_author_email(sha))
 
-  ahead, behind = branch_distances[branch]
+  behind, ahead = db["local"][branch]["distance_default"]
   row_dict["ahead"] = str(ahead)
   row_dict["behind"] = str(behind)
+
   if (
     sync_status in ["synced"]
-    and branch != ret["main_branch"]
-    and ret["main_branch"] in remote_shas
-    and remote_shas[ret["main_branch"]] == main_sha
+    and branch != default
+    and default in db["remote"]
+    and db["remote"][default]["sha"] == db["local"][default]["sha"]
   ):
     if ahead > 0:
-      url = f"https://github.com/{owner}/{repo}/compare/{ret['main_branch']}...{branch}"
+      url = f"https://github.com/{owner}/{repo}/compare/{default}...{branch}"
       row_dict["ahead"] = f"[link={url}]{row_dict['ahead']}[/link]"
 
     if behind > 0:
-      url = f"https://github.com/{owner}/{repo}/compare/{branch}...{ret['main_branch']}"
+      url = f"https://github.com/{owner}/{repo}/compare/{branch}...{default}"
       row_dict["behind"] = f"[link={url}]{row_dict['behind']}[/link]"
 
-  has_different_author = False
-
-  current_user_email = git_utils.current_user_email()
-  if current_user_email is None and show_warnings:
+  if db["email"] is None and show_warnings:
     print("WARNING: No user email configured in git.")
     print("Set it with git config --global user.email 'first.last@example.com'")
 
-  if any(email != git_utils.current_user_email() for email in remote_author_emails):
-    has_different_author = True
+  if get(db, ["remote", branch, "shas_ahead_default_local_other_authors"], []):
     message_remote_sha = f"[red]![/red]{message_remote_sha}"
   else:
     message_remote_sha = f" {message_remote_sha}"
 
-  if any(email != git_utils.current_user_email() for email in local_author_emails):
-    has_different_author = True
+  if db["local"][branch]["shas_ahead_default_other_authors"]:
     message_local_sha = f"{local_sha_short}[red]![/red]"
   else:
     message_local_sha = f"{local_sha_short} "
 
-  if sync_status == "synced" and not has_different_author:
-    ret["branches_safe_to_push"].append(branch)
+  base_branch = ""
+  if db["local"][branch]["base"] != default:
+    base_branch = db["local"][branch]["base"]
+    if db["local"][branch]["distance_base"][0]:
+      base_branch += f"~{db['local'][branch]['distance_base'][0]}"
 
   row_dict["base"] = base_branch
   row_dict["origin"] = message_remote_sha
@@ -448,26 +474,17 @@ def table_row(
     row_dict["ahead"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['ahead']}[/{CURRENT_BRANCH_COLOR}]"
     row_dict["behind"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['behind']}[/{CURRENT_BRANCH_COLOR}]"
 
-  if branch in ret["branches_with_merge_commits"]:
+  if db["local"][branch]["has_merge_commits"]:
     row_dict["ahead"] = f"{row_dict['ahead']} [{MERGE_COMMIT_COLOR}]M[/{MERGE_COMMIT_COLOR}]"
-
-  if behind > 0:
-    ret["branches_behind"].append(branch)
 
   return row_dict
 
 
-def branch_name_from_sha_ref(sha_ref: StrShaRef) -> StrBranchName:
-  """Returns the branch name sha_ref references"""
-  return re.search(r"^\s*(.*?)(?:~\d+)?\s*$", sha_ref).group(1)
-
-
 def local_branches_order(
-  all_branches: list[StrBranchName],
-  main_branch: StrBranchName,
-  current_branch: StrBranchName,
-  base_branches: dict[StrBranchName, tuple[StrShaRef, int]],
+  local: dict[str, dict],
   short: bool,
+  current: StrBranchName,
+  default: StrBranchName,
 ) -> list[StrBranchName]:
   """Defines what branches will be output in the table.
 
@@ -475,31 +492,48 @@ def local_branches_order(
     An array of branch names. The first branch is guaranteed to be the main branch. The second
     branch is the current branch, unless the current branch is the main branch.
   """
+  all_branches = list(local.keys())
+
   if short:
+    # maps base branches to the branches that depend on those base branches
     dependent_branches: dict[StrBranchName, list[StrBranchName]] = {}
-    for dependent_branch, (base_branch_ref, commit_count) in base_branches.items():
-      base_branch = branch_name_from_sha_ref(base_branch_ref)
-      dependent_branches[base_branch] = dependent_branches.get(base_branch, [])
-      dependent_branches[base_branch].append(dependent_branch)
+    # maps a branch to its base branch
+    base_branches: dict[StrBranchName, tuple[StrShaRef, int, int]] = {}
+    for branch in sorted(
+      local.keys(),
+      key=lambda branch_name: (
+        local[branch_name]["distance_base"][1],
+        branch_name,
+      ),
+    ):
+      branchd = local[branch]
+      if default in [branch, branchd["base"]]:
+        continue
+
+      dependent_branches[branchd["base"]] = dependent_branches.get(branchd["base"], [])
+      dependent_branches[branchd["base"]].append(branch)
+      base_branches[branch] = (branchd["base"], *branchd["distance_base"])
 
     queue: list[StrBranchName] = []
     queue_saw: set[StrBranchName] = set()
-    ret = [main_branch]
-    if current_branch not in ret:
-      ret.append(current_branch)
-      queue.append(current_branch)
-      queue_saw.add(current_branch)
+    ret = [default]
+    if current != default:
+      ret.append(current)
+      queue.append(current)
+      queue_saw.add(current)
 
     while len(queue) > 0:
       branch = queue.pop()
 
+      # if this branch has a base branch, add the base branch to ret and to the queue
       if branch in base_branches:
-        branch_to_add = branch_name_from_sha_ref(base_branches[branch][0])
+        branch_to_add = base_branches[branch][0]
         if branch_to_add not in queue_saw:
           ret.append(branch_to_add)
           queue.append(branch_to_add)
           queue_saw.add(branch_to_add)
 
+      # if this is a base branch, add all the branches that depend on it to ret and to the queue
       if branch in dependent_branches:
         for branch_to_add in dependent_branches[branch]:
           if branch_to_add not in queue_saw:
@@ -507,139 +541,270 @@ def local_branches_order(
             queue.append(branch_to_add)
             queue_saw.add(branch_to_add)
   else:
-    ret = copy.deepcopy(all_branches)
+    ret = all_branches
 
-    ret.remove(current_branch)
-    ret.insert(0, current_branch)
+    ret.remove(current)
+    ret.insert(0, current)
 
-    if main_branch in ret:
-      ret.remove(main_branch)
-      ret.insert(0, main_branch)
+    if default in ret:
+      ret.remove(default)
+      ret.insert(0, default)
+
+  return ret
+
+
+def construct_empty_remote(remote_sha: StrSha) -> dict:
+  return {
+    "sha": remote_sha,
+    "distance_local": None,
+    "relationship": None,  # one of [None, ">", "<", "Y"]
+    "distance_default": None,
+    "shas_ahead_default": [],
+    "shas_ahead_default_other_authors": set(),
+    "distance_default_local": None,
+    "shas_ahead_default_local": [],
+    "shas_ahead_default_local_other_authors": set(),
+  }
+
+
+def refresh_distances(
+  local: dict[StrBranchName, dict], default: StrBranchName, local_email: str, git_utils: GitUtils
+) -> dict[StrBranchName, dict]:
+  """
+  For each branch except the default one in local, it updates:
+  - distance_default
+  - has_merge_commits
+  - shas_ahead_default
+  - shas_ahead_default_other_authors
+
+  To do this, it uses local[default]["sha"], and the "sha" field for each branch in local
+
+  Additionally, it calls `refresh_bases` so it updates all fields that refresh_bases updates
+  """
+  default_sha = local[default]["sha"]
+  for branch, branchd in local.items():
+    if branch == default:
+      continue
+
+    branchd["distance_default"] = git_utils.distance(default_sha, branchd["sha"])
+
+    for parents in git_utils.parent_shas_of_ref(branchd["sha"], branchd["distance_default"][1]):
+      if len(parents) > 2:
+        branchd["has_merge_commits"] = True
+        continue
+
+    branchd["shas_ahead_default"] = []
+    branchd["shas_ahead_default_other_authors"] = set()
+
+    for sha in git_utils.shas_ahead_of(default_sha, branchd["sha"]):
+      if branchd["has_merge_commits"]:
+        continue
+      email = git_utils.commit_author_email(sha)
+      branchd["shas_ahead_default"].append({"sha": sha, "email": email})
+      if git_utils.commit_author_email(sha) != local_email:
+        branchd["shas_ahead_default_other_authors"].add(email)
+
+    local[branch] = branchd
+
+  refresh_bases(local, default)
+  return local
+
+
+def construct_remote(
+  remote_sha: StrSha,
+  local_email: str,
+  branch: StrBranchName,
+  default: StrBranchName,
+  git_utils: GitUtils,
+  remote_default_sha: StrSha | None = None,
+):
+  ret = construct_empty_remote(remote_sha)
+
+  local_sha = git_utils.local_commit_from_branch(branch).hexsha
+  default_sha = git_utils.local_commit_from_branch(default).hexsha
+  behind, ahead = git_utils.distance(local_sha, remote_sha)
+
+  ret["distance_local"] = (behind, ahead)
+  if behind == 0 and ahead:
+    ret["relationship"] = ">"
+  elif behind and ahead == 0:
+    ret["relationship"] = "<"
+  elif behind and ahead:
+    ret["relationship"] = "Y"
+  else:
+    ret["relationship"] = "="
+
+  if remote_default_sha:
+    ret["distance_default"] = git_utils.distance(remote_default_sha, remote_sha)
+    for sha in git_utils.shas_ahead_of(remote_default_sha, remote_sha):
+      email = git_utils.commit_author_email(sha)
+      ret["shas_ahead_default"].append({"sha": sha, "email": email})
+      if email != local_email:
+        ret["shas_ahead_default_other_authors"].add(email)
+
+  default_sha = default_sha
+  ret["distance_default_local"] = git_utils.distance(default_sha, remote_sha)
+  for sha in git_utils.shas_ahead_of(default_sha, remote_sha):
+    email = git_utils.commit_author_email(sha)
+    ret["shas_ahead_default_local"].append({"sha": sha, "email": email})
+    if email != local_email and branch != default:
+      ret["shas_ahead_default_local_other_authors"].add(email)
 
   return ret
 
 
 def generate_amend_commands(
-  current_branch: StrBranchName,
-  no_push: bool,
-  branches_deletable: list[StrBranchName],
-  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
-  branches_with_merge_commits: list[StrBranchName],
-  branches_safe_to_push: list[StrBranchName],
-  **kwargs,
+  db: dict, git_utils: GitUtils, no_push: bool = False
 ) -> tuple[str | None, list[StrCommand] | None]:
   """Returns a list of commands to run to amend the current commit and maintain tree structure
 
-  It returns a tuple with two values:
   Returns:
     Tuple with two values:
     1. If an error occurs, this will be the message string, otherwise None.
     2. A list of commands to run
   """
-  if current_branch not in branches_ahead_shas or current_branch in branches_with_merge_commits:
+  # TODO
+  if db["local"][db["current"]]["has_merge_commits"]:
     return ("Tool limitation: cannot amend or update branches with merge commits.", None)
-
-  relevant_branches_ahead_shas: dict[StrBranchName, list[StrShaShort]] = {}
-  for branch, shas in branches_ahead_shas.items():
-    if branch == current_branch:
-      continue
-
-    if shas[: len(branches_ahead_shas[current_branch])] == branches_ahead_shas[current_branch]:
-      relevant_branches_ahead_shas[branch] = shas[len(branches_ahead_shas[current_branch]) :]
-
-  if set(branches_with_merge_commits) & set(relevant_branches_ahead_shas.keys()):
-    return ("Tool limitation: cannot amend or update branches with merge commits.", None)
-
-  amend_commands = ["git add -A && git commit --amend --no-edit"]
-
-  if current_branch in branches_safe_to_push:
-    amend_commands[0] += " && git push -f"
-
-  return (
-    None,
-    amend_commands
-    + generate_update_commands(
-      relevant_branches_ahead_shas.keys(),
-      current_branch,
-      no_push,
-      branches_deletable,
-      False,
-      relevant_branches_ahead_shas.keys(),
-      relevant_branches_ahead_shas,
-      branches_with_merge_commits,
-      branches_safe_to_push,
-      True,
-    ),
+  remote = copy.deepcopy(db["remote"])
+  db = create_db(
+    git_utils,
+    default=db["current"],
+    branches=db["local"].keys() - {db["default"]},
+    ignore_behind=True,
+    remote=db["remote"],
   )
+  for branch, branchd in db["local"].items():
+    branchd["distance_default"] = (
+      branchd["distance_default"][0] + 1,
+      branchd["distance_default"][1],
+    )
+    if branchd["has_merge_commits"]:
+      return ("Tool limitation: cannot amend or update branches with merge commits.", None)
+  db["remote"] = remote
+  amend_commands = ["git add -A && git commit --amend --no-edit"]
+  other_authors = db["local"][db["current"]]["shas_ahead_default_other_authors"]
+  if get(db, ["remote", db["current"], "relationship"]) == "=" and not other_authors:
+    amend_commands[0] += " && git push -f"
+  return (None, amend_commands + generate_update_commands(db, git_utils, no_push, True))
 
 
 def generate_update_commands(
-  branches: list[StrBranchName],
-  main_branch: StrBranchName,
-  no_push: bool,
-  branches_deletable: list[StrBranchName],
-  unsynced_main: bool,
-  branches_behind: list[StrBranchName],
-  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
-  branches_with_merge_commits: list[StrBranchName],
-  branches_safe_to_push: list[StrBranchName],
-  main_branch_is_a_base_branch: bool = False,
-  **kwargs,
+  db: dict, git_utils: GitUtils, no_push: bool = False, is_amend: bool = False
 ) -> list[StrCommand]:
   """Creates and returns the list of git commands to run to update the branches."""
   update_commands = []
+  default = db["default"]
+  current = db["current"]
 
-  branches_ahead_shas = copy.deepcopy(branches_ahead_shas)
-  branches_to_rebase = []
-  if unsynced_main:
-    update_commands.append(f"git checkout {main_branch} && git pull")
-    branches_behind = branches
-  else:
-    if len(branches_deletable) > 0:
-      update_commands.append(f"git checkout {main_branch}")
+  #
+  # Populate branches_to_delete
+  #
 
-  for branch in branches:
-    if branch in branches_with_merge_commits:
-      branches_ahead_shas.pop(branch, None)
+  branches_to_delete: set[StrBranchName] = set()
+  for branch, branchd in db["local"].items():
+    if branch == default:
       continue
+    if (
+      branchd["pr_status"] == "merged"
+      and branchd["pr_sha"] == branchd["sha"]
+      and branch not in db["remote"]
+    ):
+      branches_to_delete.add(branch)
+  if branches_to_delete and current != default:
+    update_commands.append(f"git checkout {default}")
+    current = default
+  for branch in branches_to_delete:
+    update_commands.append(f"git branch -D {branch}")
 
-    if branch in branches_behind and branch not in branches_deletable and branch != main_branch:
-      branches_to_rebase.append(branch)
+  for branch in branches_to_delete:
+    del db["local"][branch]
 
-  for branch_to_delete in branches_deletable:
-    update_commands.append(f"git branch -D {branch_to_delete}")
+  #
+  # Pull default
+  #
 
-  if len(branches_to_rebase) > 0:
-    for branch in branches_deletable:
-      branches_ahead_shas.pop(branch, None)
+  branches_behind: set[StrBranchName] = set()
+  if not is_amend and get(db, ["remote", default, "relationship"]) == ">":
+    update_commands.append("git pull")
+    if current != default:
+      update_commands[-1] = f"git checkout {default} && " + update_commands[-1]
+      current = default
+    db["local"][default]["sha"] = db["remote"][default]["sha"]
+    refresh_distances(db["local"], default, db["email"], git_utils)
 
-    base_branches = base_branches_from_branches_ahead_refs(
-      branches_ahead_shas_to_refs(branches_ahead_shas)
-    )
+  #
+  # Populate branches_pulled
+  #
 
-    rebased_branches = []
+  branches_pulled: set[StrBranchName] = set()
+  if not is_amend:
+    for branch in sorted(db["remote"].keys() - branches_to_delete - {default}):
+      branchd = db["remote"][branch]
+      if branchd["relationship"] == ">" and not branchd["shas_ahead_default_local_other_authors"]:
+        update_commands.append(f"git checkout {branch} && git pull")
+        current = branch
+        branches_pulled.add(branch)
+        db["local"][branch]["sha"] = branchd["sha"]
 
-    for branch_to_rebase in rebase_order(base_branches) + branches_to_rebase:
-      if branch_to_rebase not in branches_to_rebase or branch_to_rebase in rebased_branches:
+  if branches_pulled:
+    refresh_distances(db["local"], default, db["email"], git_utils)
+
+  #
+  # Populate branches_behind
+  #
+
+  for branch, branchd in db["local"].items():
+    if branchd["distance_default"][0]:
+      branches_behind.add(branch)
+  branches_behind.discard(default)
+
+  #
+  # Populate branches_to_rebase
+  #
+
+  branches_to_rebase: set[StrBranchName] = set()
+  for branch in branches_behind:
+    if not db["local"][branch]["has_merge_commits"]:
+      branches_to_rebase.add(branch)
+
+  #
+  # Populate safe_to_push
+  #
+
+  safe_to_push: set[StrBranchName] = set()
+  if not no_push:
+    for branch in branches_to_rebase & db["remote"].keys():
+      other_authors = len(db["local"][branch]["shas_ahead_default_other_authors"])
+      if db["remote"][branch]["relationship"] == "=" and not other_authors:
+        safe_to_push.add(branch)
+
+  #
+  # Perform rebase operations
+  #
+
+  if branches_to_rebase:
+    base_branches = refresh_bases(db["local"], db["default"])
+    rebased_branches: set[StrBranchName] = set()
+
+    for branch in rebase_order(base_branches) + list(branches_to_rebase):
+      if branch not in branches_to_rebase or branch in rebased_branches:
         continue
 
-      if branch_to_rebase in base_branches:
-        base_branch, starting_from = base_branches[branch_to_rebase]
-      elif main_branch_is_a_base_branch:
-        base_branch = main_branch
-        starting_from = len(branches_ahead_shas.get(branch_to_rebase, []))
-      else:
-        base_branch = main_branch
-        starting_from = None
+      base_branch = db["local"][branch]["base"]
+      behind, ahead = db["local"][branch]["distance_base"]
+      if base_branch == default:
+        if not is_amend:
+          ahead = None
+      elif behind:
+        base_branch += f"~{behind}"
 
-      update_commands.append(
-        rebase_command(branch_to_rebase, base_branch, branches_safe_to_push, no_push, starting_from)
-      )
+      update_commands.append(rebase_command(branch, base_branch, safe_to_push, ahead))
 
-      rebased_branches.append(branch_to_rebase)
+      rebased_branches.add(branch)
 
-  if len(update_commands) > 0:
-    update_commands.append(f"git checkout {main_branch}")
+  if update_commands:
+    update_commands.append(f"git checkout {default}")
 
   return update_commands
 
@@ -648,7 +813,6 @@ def rebase_command(
   branch_to_rebase: StrBranchName,
   base_branch: StrShaRef,
   branches_safe_to_push: list[StrBranchName] = [],
-  no_push: bool = False,
   starting_from: int | None = None,
 ) -> StrCommand:
   """Returns the rebase command for `branch_to_rebase`."""
@@ -661,35 +825,38 @@ def rebase_command(
   else:
     ret += f" && git rebase --onto {base_branch} {branch_to_rebase}~{starting_from}"
 
-  if branch_to_rebase in branches_safe_to_push and not no_push:
+  if branch_to_rebase in branches_safe_to_push:
     ret += " && git push -f"
 
   return ret
 
 
 def branches_ahead_shas_to_refs(
-  branches_ahead_shas: dict[StrBranchName, list[StrShaShort]],
+  local: dict[StrBranchName:dict],
 ) -> list[tuple[StrBranchName, list[StrShaRef]]]:
-  """Converts a dictionary of branches and their ahead SHAs to a list of branch refs.
+  """Returns a list of branch refs for each branch
+
+  It bases the computation on "shas_ahead_default"
 
   Args:
-    branches_ahead_shas (dict): Dictionary mapping branch names to lists of SHAs. For example:
-      {
-        'b2': ['38089'],
-        'b3': ['38089', '42d83', '21d67'],
-        'b5': ['b4a32', '31b9b'],
-        'b6': ['b4a32', '31b9b', '975a7']
-      }
+    db: database
 
   Returns:
     list: List of [branch, refs] pairs. For example:
       [
-        ('b2', ['b2']),
-        ('b5', ['b5~1', 'b5']),
-        ('b3', ['b2', 'b3~1', 'b3']),
-        ('b6', ['b5~1', 'b5', 'b6'])
+        ("b2", ["b2"]),
+        ("b5", ["b5~1", "b5"]),
+        ("b3", ["b2", "b3~1", "b3"]),
+        ("b6", ["b5~1", "b5", "b6"])
       ]
   """
+  branches_ahead_shas: dict[str, list[str]] = {}
+
+  for branch, branchd in local.items():
+    for shad in branchd["shas_ahead_default"]:
+      branches_ahead_shas[branch] = branches_ahead_shas.get(branch, [])
+      branches_ahead_shas[branch].append(shad["sha"])
+
   branches_ahead_refs = []
   sha_to_ref = {}
 
@@ -714,7 +881,9 @@ def branches_ahead_shas_to_refs(
   return branches_ahead_refs
 
 
-def rebase_order(base_branches: dict[StrBranchName, tuple[StrShaRef, int]]) -> list[StrBranchName]:
+def rebase_order(
+  base_branches: dict[StrBranchName, tuple[StrShaRef, int, int]],
+) -> list[StrBranchName]:
   """
   Determines the order in which branches should be rebased based on their base branches.
 
@@ -735,7 +904,7 @@ def rebase_order(base_branches: dict[StrBranchName, tuple[StrShaRef, int]]) -> l
 
 
 def rebase_order_for(
-  branch: StrBranchName, base_branches: dict[StrBranchName, tuple[StrShaRef, int]]
+  branch: StrBranchName, base_branches: dict[StrBranchName, tuple[StrShaRef, int, int]]
 ) -> list[StrBranchName]:
   """
   Recursively determines the rebase order for a given branch.
@@ -748,17 +917,37 @@ def rebase_order_for(
     list: Ordered list of branches for rebasing.
   """
   if branch in base_branches:
-    parent_branch = branch_name_from_sha_ref(base_branches[branch][0])
-    ret = rebase_order_for(parent_branch, base_branches)
+    ret = rebase_order_for(base_branches[branch][0], base_branches)
     ret.append(branch)
     return ret
   else:
     return [branch]
 
 
+def refresh_bases(
+  local: dict[StrBranchName:dict], default: StrBranchName
+) -> dict[StrBranchName, tuple[StrShaRef, int, int]]:
+  """
+  For each branch in local, it updates:
+  - base
+  - distance_base
+  """
+  ret = base_branches_from_branches_ahead_refs(branches_ahead_shas_to_refs(local))
+
+  for branch, branchd in local.items():
+    if branch in ret:
+      branchd["base"] = ret[branch][0]
+      branchd["distance_base"] = (ret[branch][1], ret[branch][2])
+    else:
+      branchd["base"] = default
+      branchd["distance_base"] = branchd["distance_default"]
+
+  return ret
+
+
 def base_branches_from_branches_ahead_refs(
   branches_ahead_refs: list[tuple[StrBranchName, list[StrShaRef]]],
-) -> dict[StrBranchName, tuple[StrShaRef, int]]:
+) -> dict[StrBranchName, tuple[StrShaRef, int, int]]:
   """Determines the base branch for each branch from a list of ahead refs.
 
   Args:
@@ -774,8 +963,8 @@ def base_branches_from_branches_ahead_refs(
     A dict mapping of branch names to their base branch refs and how many commits on top of their
     base branch they have. For example:
       {
-        "b3": ("b2", 2),
-        "b6": ("b5", 1)
+        "b3": ("b2", 0, 2),
+        "b6": ("b5", 0, 1)
       }
   """
   ret = {}
@@ -783,9 +972,14 @@ def base_branches_from_branches_ahead_refs(
   for branch, refs in branches_ahead_refs:
     commit_count = 0
     for ref in reversed(refs):
-      parent_branch = re.search(r"^\s*(.*?)(?:~\d+)?\s*$", ref).group(1)
+      result = re.search(r"^\s*(.*?)(?:~(\d+))?\s*$", ref)
+      parent_branch = result.group(1)
       if parent_branch != branch:
-        ret[branch] = (ref, commit_count)
+        if result.group(2) is None:
+          behind = 0
+        else:
+          behind = int(result.group(2))
+        ret[branch] = (parent_branch, behind, commit_count)
         break
       commit_count += 1
 

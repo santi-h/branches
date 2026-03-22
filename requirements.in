@@ -1,4 +1,5 @@
 GitPython
+pydash
 requests
 rich
 urllib3

@@ -102,11 +102,16 @@ def run_test(
     subprocess.run(f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {cleanup_command}", shell=True)
 
 
-def commit(name: str, date: datetime | None = None) -> str:
+def commit(name: str, date: datetime | None = None, author: str | None = None) -> str:
   ret = f"echo '{name}.txt' > {name}.txt && git add -A && git commit -m '{name}.txt'"
+
   if date:
     tformat = "%Y-%m-%dT%H:%M:%S%z"
     ret += f" --date='{date.strftime(tformat)}'"
+
+  if author:
+    ret += f" --author='{author}'"
+
   return ret
 
 
@@ -296,7 +301,6 @@ def test_merged_base(httpserver: HTTPServer):
       r"          \w{5}    0  1 2  branch2 branch1                         ",
       r"          \w{5}    0  1 1  branch1         #123 \(\w{5}\) by santi-h ",
       r"                                                                   ",
-      r"git checkout main && \\",
       r"git branch -D branch1 && \\",
       r"git checkout branch2 && git rebase main && \\",
       r"git checkout main",
@@ -791,7 +795,7 @@ def test_cli_misc():
       r" ──────────────────────────────────────── ",
       r"  \w{5} > \w{5}    0  0 0  main           ",
       r"                                          ",
-      r"git checkout main && git pull && \\",
+      r"git pull && \\",
       r"git checkout main",
       r"",
     ],
@@ -1302,9 +1306,11 @@ def test_pulls1():
       r"  \w{5}   \w{5}    0  1 3  branch3 branch2    ",
       r"  \w{5} > \w{5}    0  1 2  branch2 branch1    ",
       r"                                              ",
+      r"git checkout branch1 && git pull && \\",
+      r"git checkout branch2 && git pull && \\",
       r"git checkout branch1 && git rebase main && \\",
       r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
-      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout branch3 && git reset --hard branch2 && git push -f && \\",
       r"git checkout main",
       r"",
     ],
@@ -1352,9 +1358,10 @@ def test_pulls2():
       r"  \w{5}   \w{5}    0  1 3  branch3 branch2    ",
       r"  \w{5}   \w{5}    0  1 2  branch2 branch1    ",
       r"                                              ",
+      r"git checkout branch1 && git pull && \\",
       r"git checkout branch1 && git rebase main && \\",
-      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && git push -f && \\",
-      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout branch2 && git reset --hard branch1 && git push -f && \\",
+      r"git checkout branch3 && git rebase --onto branch1 branch3~1 && git push -f && \\",
       r"git checkout main",
       r"",
     ],
@@ -1401,9 +1408,10 @@ def test_pulls3():
       r"  \w{5}   \w{5}    0  1 3  branch3 branch2    ",
       r"  \w{5}   \w{5}    0  1 2  branch2 branch1    ",
       r"                                              ",
-      r"git checkout branch1 && git rebase main && \\",
-      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && git push -f && \\",
-      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout branch1 && git pull && \\",
+      r"git checkout branch2 && git rebase main && git push -f && \\",
+      r"git checkout branch1 && git rebase --onto branch2 branch1~1 && \\",
+      r"git checkout branch3 && git reset --hard branch1 && git push -f && \\",
       r"git checkout main",
       r"",
     ],
@@ -1439,8 +1447,8 @@ def test_pulls4():
       r"  \w{5} > \w{5}    0  0 0  main            ",
       r"  \w{5} > \w{5}    0  0 0  branch1         ",
       r"                                           ",
-      r"git checkout main && git pull && \\",
-      r"git checkout branch1 && git rebase main && \\",
+      r"git pull && \\",
+      r"git checkout branch1 && git pull && \\",
       r"git checkout main",
       r"",
     ],
@@ -1479,8 +1487,8 @@ def test_pulls5():
       r"  \w{5} > \w{5}    0  0 0  main            ",
       r"  \w{5} > \w{5}    0  0 0  branch1         ",
       r"                                           ",
-      r"git checkout main && git pull && \\",
-      r"git checkout branch1 && git rebase main && \\",
+      r"git pull && \\",
+      r"git checkout branch1 && git pull && \\",
       r"git checkout main",
       r"",
     ],
@@ -1520,7 +1528,8 @@ def test_pulls6():
       r"  \w{5} > \w{5}    0  0 0  main            ",
       r"  \w{5} > \w{5}    0  0 0  branch1         ",
       r"                                           ",
-      r"git checkout main && git pull && \\",
+      r"git pull && \\",
+      r"git checkout branch1 && git pull && \\",
       r"git checkout branch1 && git rebase main && \\",
       r"git checkout main",
       r"",
@@ -1530,11 +1539,13 @@ def test_pulls6():
 
 def test_pulls7():
   """
-      D     <- branch2, origin/branch1
+  Setup:
+
+        D  <- branch2, origin/branch1
+       /
+      C    <- branch1
      /
-    C       <- branch1
-   /
-  A---B     <- main
+    A---B  <- main
   """
   now = datetime.now(timezone.utc) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -1567,6 +1578,54 @@ def test_pulls7():
       r"git add -A && git commit --amend --no-edit && \\",
       r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
       r"git checkout branch1",
+      r"",
+    ],
+  )
+
+
+def test_pulls8():
+  """
+  Description:
+    Tests what happens when the branch origin is ahead but has other authors. This current behavior
+    might be undesired. Probably not safe to rebase the local branch in this case automatically.
+    We should let the user manually handle this case. The fact that there is other authors in origin
+    might need to "pin" the local branch even if it's behind main.
+
+  Setup:
+
+        D  <- !origin/branch1
+       /
+      C    <- branch1
+     /
+    A---B  <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+        "git push",
+        "git checkout -b branch1 head~1",
+        commit("C", now + sec * 3),
+        commit("D", now + sec * 4, 'Name <me@git.com>'),
+        "git push",
+        "git reset --hard head~1",
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main            ",
+      r" !\w{5} > \w{5}    0  1 1  branch1         ",
+      r"                                           ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
       r"",
     ],
   )
@@ -1619,5 +1678,54 @@ def test_pull_amend_base():
       r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
       r"git checkout branch1",
       r"",
+    ],
+  )
+
+
+def test_no_main():
+  """
+  Description:
+    Tests what happens when there is no main branch and no origin
+
+  Setup:
+
+    A---B  <- branch1
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git checkout -b branch1",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  branch1         ",
+      r"                                           ",
+    ],
+  )
+
+  run_test(
+    " && ".join(
+      [
+        f"git checkout -b branch2",
+        commit("C", now + sec * 3),
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  branch1         ",
+      r"          \w{5}    0  0 1  branch2         ",
+      r"                                           ",
     ],
   )
