@@ -10,13 +10,15 @@ Used for three purposes:
 2. [**Keeping branches up to date**](#purpose-2-keeping-branches-up-to-date): Outputs a list of `git` commands that the user can choose to run to catch up their branches to the main branch.
 3. [**Helping amend commits while keeping the tree structure intact**](#purpose-3-helping-amend-commits-while-keeping-the-tree-structure-intact): Outputs a list of `git` commands that the user can choose to run to amend the last commit and keep the tree structure of all dependent branches intact.
 
-## Installation
+## Installation / Upgrading
 
 ```shell
 /usr/bin/env bash -c "$(curl -fsSL https://raw.githubusercontent.com/santi-h/branches/main/scripts/install.sh)"
 ```
 
 (see [installation script](/scripts/install.sh) for details)
+
+The same command is used for upgrading.
 
 ## Uninstall
 
@@ -81,7 +83,7 @@ The script does not run any write `git` command. It only outputs suggested `git`
     ```
 
 - Push the branches that are currently in sync with `origin` and the current user is the only author.
-- Safely pull updates that exist in `origin` but not locally
+- Safely pull updates that exist in `origin` but not locally, both for the main (i.e. default) branch and for the feature branches.
 
 All suggestions are meant to be as safe as possible. For example, in order for it to suggest a branch to be deleted, all these conditions need to be satisfied:
 
@@ -297,7 +299,7 @@ echo 'export PYENV_VERSION=branches' > .envrc
 
 (allow if prompted)
 
-- Install `pip-tools` with `pip install -U pip-tools`. See [`pip-tools` docs](https://pypi.org/project/pip-tools).
+- Install `pip-tools` with `pip install -U pip pip-tools`. See [`pip-tools` docs](https://pypi.org/project/pip-tools).
 
 - Install `pypi` dependencies:
 
@@ -329,7 +331,7 @@ Assuming `.envrc` stays
 ```shell
 pyenv virtualenv-delete -f branches &&
 pyenv virtualenv `cat .python-version` branches &&
-pip install -U pip-tools
+pip install -U pip pip-tools
 ```
 
 ## Development: upgrade python and dependencies
@@ -342,7 +344,7 @@ pyenv virtualenv-delete -f branches &&
 pyenv install $NEW_PYTHON_VERSION &&
 echo $NEW_PYTHON_VERSION > .python-version &&
 pyenv virtualenv `cat .python-version` branches &&
-pip install -U pip-tools &&
+pip install -U pip pip-tools &&
 pip-compile --output-file=requirements.txt requirements.in --upgrade &&
 pip-compile --output-file=requirements-dev.txt requirements-dev.in --upgrade &&
 pip-sync requirements-dev.txt &&
