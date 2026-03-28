@@ -49,6 +49,10 @@ packaging==26.0
     #   pytest
 pluggy==1.6.0
     # via pytest
+pydash==8.0.6
+    # via
+    #   -c requirements.txt
+    #   -r requirements.in
 pygments==2.19.2
     # via
     #   -c requirements.txt
@@ -76,6 +80,10 @@ smmap==5.0.2
     # via
     #   -c requirements.txt
     #   gitdb
+typing-extensions==4.15.0
+    # via
+    #   -c requirements.txt
+    #   pydash
 urllib3==2.6.3
     # via
     #   -c requirements.txt
