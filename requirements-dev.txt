@@ -8,11 +8,11 @@ altgraph==0.17.5
     # via
     #   macholib
     #   pyinstaller
-certifi==2026.1.4
+certifi==2026.2.25
     # via
     #   -c requirements.txt
     #   requests
-charset-normalizer==3.4.4
+charset-normalizer==3.4.6
     # via
     #   -c requirements.txt
     #   requests
@@ -58,25 +58,25 @@ pygments==2.19.2
     #   -c requirements.txt
     #   pytest
     #   rich
-pyinstaller==6.18.0
+pyinstaller==6.19.0
     # via -r requirements-dev.in
-pyinstaller-hooks-contrib==2026.0
+pyinstaller-hooks-contrib==2026.3
     # via pyinstaller
 pytest==9.0.2
     # via -r requirements-dev.in
 pytest-httpserver==1.1.5
     # via -r requirements-dev.in
-requests==2.32.5
+requests==2.33.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
-rich==14.3.2
+rich==14.3.3
     # via
     #   -c requirements.txt
     #   -r requirements.in
-ruff==0.15.0
+ruff==0.15.8
     # via -r requirements-dev.in
-smmap==5.0.2
+smmap==5.0.3
     # via
     #   -c requirements.txt
     #   gitdb
@@ -89,7 +89,7 @@ urllib3==2.6.3
     #   -c requirements.txt
     #   -r requirements.in
     #   requests
-werkzeug==3.1.5
+werkzeug==3.1.7
     # via pytest-httpserver
 
 # The following packages are considered to be unsafe in a requirements file:
