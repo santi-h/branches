@@ -1285,26 +1285,29 @@ def test_subdir():
   )
 
 
-def test_authors():
-  #   C       <- branch1
-  #  /
-  # A---B     <- main
+def test_authors1():
+  """
+  Description:
+    Tests different "other authors" scenarios
+
+  Setup:
+
+    C       <- branch1
+   /
+  A---B     <- main
+  """
   now = datetime.now(timezone.utc) - timedelta(hours=6)
   sec = timedelta(seconds=1)
-  tformat = "%Y-%m-%dT%H:%M:%S%z"
 
   # Local branch has commits by a different author
   run_test(
     " && ".join(
       [
         f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        "echo 'A.txt' > A.txt && git add .",
-        f"git commit -m 'A.txt' --date='{(now + sec * 1).strftime(tformat)}'",
-        "echo 'B.txt' > B.txt && git add .",
-        f"git commit -m 'B.txt' --date='{(now + sec * 2).strftime(tformat)}'",
+        commit("A", now + sec * 1),
+        commit("B", now + sec * 2),
         "git checkout -b branch1",
-        "echo 'C.txt' > C.txt && git add .",
-        f"git commit -m 'C.txt' --date='{(now + sec * 3).strftime(tformat)}' --author='Name <me@git.com>'",
+        commit("C", now + sec * 3, "Name <me@git.com>"),
       ]
     ),
     "branches",
@@ -1319,7 +1322,7 @@ def test_authors():
     expected_returncode=0,
   )
 
-  # Remote and local branch have commits by a different author
+  # Remote and local branch have commits by a different author, but main is not in origin
   run_test(
     "git push",
     "branches",
@@ -1334,7 +1337,22 @@ def test_authors():
     expected_returncode=0,
   )
 
-  # Remote branch has commits by a different author
+  # Remote and local branch have commits by a different author, and main is in origin
+  run_test(
+    "git checkout main && git push && git checkout branch1",
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main            ",
+      r" !\w{5}   \w{5}!   0  0 1  branch1         ",
+      r"                                           ",
+    ],
+    expected_returncode=0,
+  )
+
+  # Remote branch only has commits by a different author
   git_name = run_command("git config --get user.name").stdout.strip()
   git_email = run_command("git config --get user.email").stdout.strip()
   run_test(
@@ -1344,11 +1362,69 @@ def test_authors():
       r"                                           ",
       r" Origin - Local  Age <- -> Branch  Base PR ",
       r" ───────────────────────────────────────── ",
-      r"          \w{5}    0  0 0  main            ",
+      r"  \w{5}   \w{5}    0  0 0  main            ",
       r" !\w{5} Y \w{5}    0  0 1  branch1         ",
       r"                                           ",
     ],
     expected_returncode=0,
+  )
+
+
+def test_authors2():
+  """
+  Description:
+    Tests what happens when:
+      - main origin is ahead
+      - the local branch is behind but got caught up via a merge commit
+      - the origin branch deviated and was also caught up via a merge commit
+
+  Setup:
+
+          F---<D>   <- origin/branch1
+         /
+        E---G---<C> <- branch1
+       /
+      |     D       <- origin/main
+      |    /
+  A---B---C         <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1, "Name <me@git.com>"),
+        commit("B", now + sec * 2, "Name <me@git.com>"),
+        commit("C", now + sec * 3, "Name <me@git.com>"),
+        commit("D", now + sec * 4, "Name <me@git.com>"),
+        "git push",
+        "git checkout -b branch1 HEAD~2",
+        commit("E", now + sec * 5),
+        "git checkout -b tmp && git checkout branch1",
+        commit("F", now + sec * 6),
+        "git merge main",
+        "git push",
+        "git reset --hard tmp && git branch -D tmp",
+        commit("G", now + sec * 7),
+        "git checkout main && git reset --hard HEAD~1",
+        "git checkout branch1",
+        "git merge main",
+      ]
+    ),
+    "branches",
+    [
+      r"                                            ",
+      r" Origin - Local  Age <- ->  Branch  Base PR ",
+      r" ────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0   main            ",
+      r" !\w{5} Y \w{5}    0  0 3 M branch1         ",
+      r"                                            ",
+      r"git checkout main && git pull && \\",
+      r"git checkout main",
+      r"",
+    ],
   )
 
 
