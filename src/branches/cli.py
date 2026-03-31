@@ -353,7 +353,14 @@ def table_row(
       if remote_commit is None:
         remote_commit = git_utils.fetch_single_sha(remote_sha)
 
-    db["remote"][branch] = construct_remote(remote_sha, db["email"], branch, default, git_utils)
+    db["remote"][branch] = construct_remote(
+      remote_sha,
+      db["email"],
+      branch,
+      default,
+      git_utils,
+      get(db, ["remote", default, "sha"]),
+    )
 
   try:
     pr = None
@@ -391,14 +398,6 @@ def table_row(
       f"[link={pr['html_url']}][{PR_STATUS_COLORS[pr_status]}]#{pr['number']}"
       f"[/{PR_STATUS_COLORS[pr_status]}][/link] ({pr_short_sha}) by " + pr["user"]["login"]
     )
-
-    # if db["local"][branch]["pr_status"] == "merged" and db["local"][branch]["pr_sha"] == db["local"][branch]["sha"] and branch not in db["remote"]:
-    #   # Only delete if all of these are true:
-    #   # - This is not the main branch
-    #   # - The PR was merged
-    #   # - The merged code is exactly the same as our local branch
-    #   # - The branch was deleted in origin
-    #   ret["branches_deletable"].append(branch)
 
   message_remote_sha = remote_sha_short
   if sync_status == "synced":
@@ -440,7 +439,7 @@ def table_row(
     print("WARNING: No user email configured in git.")
     print("Set it with git config --global user.email 'first.last@example.com'")
 
-  if get(db, ["remote", branch, "shas_ahead_default_local_other_authors"], []):
+  if get(db, ["remote", branch, "shas_ahead_default_other_authors"], []):
     message_remote_sha = f"[red]![/red]{message_remote_sha}"
   else:
     message_remote_sha = f" {message_remote_sha}"
