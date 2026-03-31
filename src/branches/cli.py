@@ -686,6 +686,7 @@ def generate_update_commands(
   """Creates and returns the list of git commands to run to update the branches."""
   update_commands = []
   default = db["default"]
+  current_original = db["current"]
   current = db["current"]
 
   #
@@ -791,11 +792,14 @@ def generate_update_commands(
         base_branch += f"~{behind}"
 
       update_commands.append(rebase_command(branch, base_branch, safe_to_push, ahead))
+      current = branch
 
       rebased_branches.add(branch)
 
-  if update_commands:
+  if current_original in branches_to_delete and current != default:
     update_commands.append(f"git checkout {default}")
+  elif current_original not in branches_to_delete and current != current_original:
+    update_commands.append(f"git checkout {current_original}")
 
   return update_commands
 
