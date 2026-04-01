@@ -4,7 +4,9 @@
 
 ![screenshot](/docs/branches_screenshot.png)
 
-Used for three purposes:
+This tool is useful if you prefer rebasing over merging and use GitHub.
+
+Serves three purposes:
 
 1. [**Getting relevant branches info**](#purpose-1-getting-relevant-branches-info): Alternative to `git branch`. Provides useful information about local branches.
 2. [**Keeping branches up to date**](#purpose-2-keeping-branches-up-to-date): Outputs a list of `git` commands that the user can choose to run to catch up their branches to the main branch.

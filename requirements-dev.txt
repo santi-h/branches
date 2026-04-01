@@ -53,20 +53,20 @@ pydash==8.0.6
     # via
     #   -c requirements.txt
     #   -r requirements.in
-pygments==2.19.2
+pygments==2.20.0
     # via
     #   -c requirements.txt
     #   pytest
     #   rich
 pyinstaller==6.19.0
     # via -r requirements-dev.in
-pyinstaller-hooks-contrib==2026.3
+pyinstaller-hooks-contrib==2026.4
     # via pyinstaller
 pytest==9.0.2
     # via -r requirements-dev.in
 pytest-httpserver==1.1.5
     # via -r requirements-dev.in
-requests==2.33.0
+requests==2.33.1
     # via
     #   -c requirements.txt
     #   -r requirements.in

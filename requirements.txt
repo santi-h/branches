@@ -20,9 +20,9 @@ mdurl==0.1.2
     # via markdown-it-py
 pydash==8.0.6
     # via -r requirements.in
-pygments==2.19.2
+pygments==2.20.0
     # via rich
-requests==2.33.0
+requests==2.33.1
     # via -r requirements.in
 rich==14.3.3
     # via -r requirements.in
