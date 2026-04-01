@@ -36,7 +36,7 @@ class GitUtils:
     if self._repo is None:
       raise Exception("Not a git repository")
 
-    self._repo_path = repo_path
+    self._repo_path = self._repo.working_tree_dir
     self._cmd = git.cmd.Git(repo_path)
     self._git = self._repo.git
     self._current_branch = None
@@ -50,7 +50,7 @@ class GitUtils:
     if self._owner_name and self._repo_name:
       return self._owner_name, self._repo_name
 
-    remotes = self._cmd.execute(["git", "remote", "-v"])
+    remotes = self._cmd.execute(["git", "-C", self._repo_path, "remote", "-v"])
     if "PYTEST_CURRENT_TEST" not in os.environ:
       match = re.search(r"github\.com(?::|\/)([\w\-]+)\/([\w\-]+)\.git \(fetch\)", remotes)
     else:
@@ -77,6 +77,8 @@ class GitUtils:
     branches = self._cmd.execute(
       [
         "git",
+        "-C",
+        self._repo_path,
         "for-each-ref",
         "--sort=refname",
         "--sort=-authordate",
@@ -154,7 +156,9 @@ class GitUtils:
       branches = branches.splitlines()
 
     try:
-      ls_remote_output = self._cmd.execute(["git", "ls-remote", "origin", *branches])
+      ls_remote_output = self._cmd.execute(
+        ["git", "-C", self._repo_path, "ls-remote", "origin", *branches]
+      )
     except git.exc.GitCommandError:
       # origin doesn't exist
       return {}
@@ -173,7 +177,15 @@ class GitUtils:
     Second return number is how many commits branch_to is behind of branch_from
     """
     result = self._cmd.execute(
-      ["git", "rev-list", "--left-right", "--count", f"{branch_from}...{branch_to}"]
+      [
+        "git",
+        "-C",
+        self._repo_path,
+        "rev-list",
+        "--left-right",
+        "--count",
+        f"{branch_from}...{branch_to}",
+      ]
     )
     result = re.split(r"\s+", result.strip())
     return (int(result[0]), int(result[1]))
@@ -187,7 +199,7 @@ class GitUtils:
     """
     ret = []
 
-    command = ["git", "rev-list", "--parents", f"-n{n}", ref, "--"]
+    command = ["git", "-C", self._repo_path, "rev-list", "--parents", f"-n{n}", ref, "--"]
     for line in self._cmd.execute(command).split("\n"):
       ret.append(re.split(r"\s+", line.strip()))
 
@@ -212,18 +224,28 @@ class GitUtils:
 
   def shas_ahead_of(self, branch_from, branch_to) -> list[str]:
     result = self._cmd.execute(
-      ["git", "log", f"{branch_from}..{branch_to}", "--format=%H", "--reverse"]
+      [
+        "git",
+        "-C",
+        self._repo_path,
+        "log",
+        f"{branch_from}..{branch_to}",
+        "--format=%H",
+        "--reverse",
+      ]
     )
     return [sha for sha in re.split(r"\s+", result.strip()) if sha.strip()]
 
   def current_user_email(self) -> str | None:
     try:
-      return self._cmd.execute(["git", "config", "user.email"]).strip()
+      return self._cmd.execute(["git", "-C", self._repo_path, "config", "user.email"]).strip()
     except git.exc.GitCommandError:
       return None
 
   def commit_author_email(self, sha):
-    return self._cmd.execute(["git", "show", "--format=%ae", "--no-patch", sha]).strip()
+    return self._cmd.execute(
+      ["git", "-C", self._repo_path, "show", "--format=%ae", "--no-patch", sha]
+    ).strip()
 
   def date_authored(self, sha):
     return self.local_commit_from_sha(sha).authored_datetime
