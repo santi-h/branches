@@ -112,6 +112,14 @@ def main() -> int:
   )
 
   parser.add_argument(
+    "-n",
+    "--no",
+    action="store_true",
+    default=False,
+    help="Automatically decline to update commands",
+  )
+
+  parser.add_argument(
     "-y",
     "--yes",
     action="store_true",
@@ -198,7 +206,9 @@ def branches(args: argparse.Namespace) -> int:
   if len(update_commands) > 0 and not args.quiet:
     print(" && \\\n".join(update_commands))
     print("")
-    if args.yes or ("PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?")):
+    if not args.no and (
+      args.yes or ("PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?"))
+    ):
       sys.stdout.flush()
       ret = subprocess.run(
         " && ".join(update_commands), shell=True, stderr=subprocess.STDOUT
