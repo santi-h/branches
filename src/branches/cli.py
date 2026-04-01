@@ -111,6 +111,8 @@ def main() -> int:
     "-v", "--version", action="store_true", default=False, help="Print version and exit"
   )
 
+  parser.add_argument("-C", "--path", type=str, help="Path to the git repository")
+
   parser.add_argument(
     "-n",
     "--no",
@@ -157,7 +159,13 @@ def branches(args: argparse.Namespace) -> int:
     print(VERSION)
     return ret
 
-  repo = GitUtils.repo_from_path()
+  if args.path:
+    if not os.path.isdir(args.path) or not os.path.exists(args.path):
+      print(f"Path '{args.path}' does not exist or is not a directory.")
+      return 1
+    repo = GitUtils.repo_from_path(args.path)
+  else:
+    repo = GitUtils.repo_from_path()
   if repo is None:
     print("Not a git repository.")
     return 1
@@ -375,7 +383,7 @@ def table_row(
   try:
     pr = None
     if "GITHUB_TOKEN" in os.environ:
-      pr = pull_request(branch, os.environ["GITHUB_TOKEN"])
+      pr = pull_request(branch, os.environ["GITHUB_TOKEN"], git_utils)
     elif show_warnings and "PYTEST_CURRENT_TEST" not in os.environ:
       print("WARNING: GITHUB_TOKEN envar is not set.")
   except requests.exceptions.ConnectionError:
@@ -991,7 +999,7 @@ def base_branches_from_branches_ahead_refs(
   return ret
 
 
-def pull_request(branch: StrBranchName, github_token: str) -> dict | None:
+def pull_request(branch: StrBranchName, github_token: str, git_utils: GitUtils) -> dict | None:
   """Fetches the pull request for a given branch from the GitHub API.
 
   Assumes the envar `GITHUB_TOKEN` is set.
@@ -1005,7 +1013,6 @@ def pull_request(branch: StrBranchName, github_token: str) -> dict | None:
   Returns:
     Pull request data if found, otherwise None.
   """
-  git_utils = GitUtils()
   owner, repo = git_utils.owner_and_repo()
 
   if owner is None or repo is None:

@@ -1929,7 +1929,13 @@ def test_path_argument():
   run_test(
     None,
     f"branches -C '{GIT_TMP_DIRPATH_LOCAL}'",
-    [],
-    expected_returncode=2,
+    [
+      r"                                          ",
+      r" Origin - Local  Age <- -> Branch Base PR ",
+      r" ──────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main           ",
+      r"                                          ",
+    ],
+    expected_returncode=0,
     directory=os.environ["HOME"],
   )
