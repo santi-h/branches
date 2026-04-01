@@ -217,8 +217,7 @@ def test_mockserver(httpserver):
       r"          \w{5}    0  1 1  branch1      #123 \(\w{5}\) by santi-h ",
       r"                                                                ",
       r"git checkout main && \\",
-      r"git branch -D branch1 && \\",
-      r"git checkout main",
+      r"git branch -D branch1",
       r"",
     ],
     httpserver=httpserver,
@@ -344,8 +343,7 @@ def test_merged_base(httpserver: HTTPServer):
       r"                                                                   ",
       r"git checkout main && \\",
       r"git branch -D branch1 && \\",
-      r"git checkout branch2 && git rebase main && \\",
-      r"git checkout main",
+      r"git checkout branch2 && git rebase main",
       r"",
     ],
     httpserver=httpserver,
@@ -492,7 +490,7 @@ def test_cli_misc():
       r"git checkout branch4 && git reset --hard branch3 && \\",
       r"git checkout branch6 && git rebase --onto branch3 branch6~1 && \\",
       r"git checkout branch5 && git rebase --onto branch3 branch5~2 && \\",
-      r"git checkout main",
+      r"git checkout branch2",
       r"",
     ],
   )
@@ -547,7 +545,7 @@ def test_cli_misc():
       r"git checkout branch4 && git reset --hard branch3 && \\",
       r"git checkout branch6 && git rebase --onto branch3 branch6~1 && \\",
       r"git checkout branch5 && git rebase --onto branch3 branch5~2 && \\",
-      r"git checkout main",
+      r"git checkout branch1",
       r"",
     ],
   )
@@ -599,7 +597,7 @@ def test_cli_misc():
       r"git checkout branch4 && git reset --hard branch3 && \\",
       r"git checkout branch6 && git rebase --onto branch3 branch6~1 && \\",
       r"git checkout branch5 && git rebase --onto branch3 branch5~2 && \\",
-      r"git checkout main",
+      r"git checkout branch10",
       r"",
     ],
   )
@@ -614,8 +612,7 @@ def test_cli_misc():
       r"          \w{5}    0  0 0  main            ",
       r"          \w{5}    0  2 1  branch9         ",
       r"                                           ",
-      r"git checkout branch9 && git rebase main && \\",
-      r"git checkout main",
+      r"git checkout branch9 && git rebase main",
       r"",
     ],
   )
@@ -795,8 +792,7 @@ def test_cli_misc():
       r" ──────────────────────────────────────── ",
       r"  \w{5} > \w{5}    0  0 0  main           ",
       r"                                          ",
-      r"git pull && \\",
-      r"git checkout main",
+      r"git pull",
       r"",
     ],
   )
@@ -858,8 +854,7 @@ def test_misc1():
       r"  \w{5}   \w{5}    0  0 0  main            ",
       r"  \w{5} Y \w{5}    0  1 1  branch1         ",
       r"                                           ",
-      r"git checkout branch1 && git rebase main && \\",
-      r"git checkout main",
+      r"git checkout branch1 && git rebase main",
       r"",
     ],
   )
@@ -1422,7 +1417,7 @@ def test_authors2():
       r"  \w{5} Y \w{5}    0  0 3 M branch1         ",
       r"                                            ",
       r"git checkout main && git pull && \\",
-      r"git checkout main",
+      r"git checkout branch1",
       r"",
     ],
   )
@@ -1474,7 +1469,7 @@ def test_pulls1():
       r"git checkout branch1 && git rebase main && \\",
       r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
       r"git checkout branch3 && git reset --hard branch2 && git push -f && \\",
-      r"git checkout main",
+      r"git checkout branch1",
       r"",
     ],
   )
@@ -1525,7 +1520,7 @@ def test_pulls2():
       r"git checkout branch1 && git rebase main && \\",
       r"git checkout branch2 && git reset --hard branch1 && git push -f && \\",
       r"git checkout branch3 && git rebase --onto branch1 branch3~1 && git push -f && \\",
-      r"git checkout main",
+      r"git checkout branch1",
       r"",
     ],
   )
@@ -1575,7 +1570,7 @@ def test_pulls3():
       r"git checkout branch2 && git rebase main && git push -f && \\",
       r"git checkout branch1 && git rebase --onto branch2 branch1~1 && \\",
       r"git checkout branch3 && git reset --hard branch1 && git push -f && \\",
-      r"git checkout main",
+      r"git checkout branch1",
       r"",
     ],
   )
@@ -1787,8 +1782,7 @@ def test_pulls8():
       r"  \w{5}   \w{5}    0  0 0  main            ",
       r" !\w{5} > \w{5}    0  1 1  branch1         ",
       r"                                           ",
-      r"git checkout branch1 && git rebase main && \\",
-      r"git checkout main",
+      r"git checkout branch1 && git rebase main",
       r"",
     ],
   )
