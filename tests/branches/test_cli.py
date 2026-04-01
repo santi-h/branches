@@ -33,16 +33,17 @@ def run_command(command: str, dirpath: str = GIT_TMP_DIRPATH_LOCAL) -> Completed
 
 
 def run_test(
-  prep_command: str | None,
+  git_dir_prep_command: str | None,
   trigger_command: str,
   expected_stdout: str | list[str],
   expected_returncode=0,
   cleanup_command: str | None = None,
   httpserver: HTTPServer | None = None,
   trigger_command_dir: str | None = None,
+  directory: str | None = None,
 ):
-  if len(prep_command or "") > 0:
-    result = run_command(prep_command)
+  if len(git_dir_prep_command or "") > 0:
+    result = run_command(git_dir_prep_command)
     assert result.returncode == 0, (
       f"Prep command output:\n{result.stdout}\nPrep command stderr:\n{result.stderr}"
     )
@@ -57,7 +58,10 @@ def run_test(
 
   envars = " ".join(envars)
   print(envars)
-  command = [f"cd '{GIT_TMP_DIRPATH_LOCAL}'"]
+  if directory:
+    command = [f"cd '{directory}'"]
+  else:
+    command = [f"cd '{GIT_TMP_DIRPATH_LOCAL}'"]
   if trigger_command_dir:
     command.append(f"cd {trigger_command_dir}")
   command.append(f"{envars} python -m {trigger_command}")
@@ -1885,4 +1889,47 @@ def test_no_main():
       r"          \w{5}    0  0 1  branch2         ",
       r"                                           ",
     ],
+  )
+
+
+def test_no_git_directory():
+  """
+  Description:
+    Tests what happens when the branches command is not run in a git directory
+  """
+  run_test(
+    None,
+    "branches",
+    "Not a git repository.",
+    expected_returncode=1,
+    directory=os.environ["HOME"],
+  )
+
+
+def test_path_argument():
+  """
+  Description:
+    Tests the -C argument
+
+  Setup:
+
+    A  <- main
+  """
+  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    "git init && " + commit("A", now + sec * 1),
+    "branches",
+    "Not a git repository.",
+    expected_returncode=1,
+    directory=os.environ["HOME"],
+  )
+
+  run_test(
+    None,
+    f"branches -C '{GIT_TMP_DIRPATH_LOCAL}'",
+    [],
+    expected_returncode=2,
+    directory=os.environ["HOME"],
   )
