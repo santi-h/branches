@@ -1,23 +1,25 @@
 # Example usage:
 # python branches.py
-from . import VERSION
 import argparse
-from .utils.git_utils import GitUtils
-from git import Commit
-import requests
+import copy
 import os
+import re
 import subprocess
 import sys
+from datetime import UTC, datetime
+from typing import TypeAlias
 from urllib.parse import urlencode
-from rich.console import Console
+
+import requests
+from git import Commit
+from pydash import get
 from rich import box
+from rich.console import Console
 from rich.live import Live
 from rich.table import Table
-from datetime import datetime, timezone
-import re
-from typing import TypeAlias
-from pydash import get
-import copy
+
+from . import VERSION
+from .utils.git_utils import GitUtils
 
 # Using some TypeAliases just for readability / documentation
 StrBranchName: TypeAlias = str
@@ -172,7 +174,7 @@ def branches(args: argparse.Namespace) -> int:
 
   git_utils = GitUtils(repo=repo)
   table = Table(padding=(0, 0), box=box.SIMPLE_HEAD, header_style="")
-  for _column_key, column_attr in COLUMNS.items():
+  for column_attr in COLUMNS.values():
     table.add_column(column_attr["column_name"], **(column_attr["column_props"] or {}))
 
   if args.operation == "amend":
@@ -181,7 +183,7 @@ def branches(args: argparse.Namespace) -> int:
   with Live(table, console=console, refresh_per_second=20):
     db = print_table(args, table, git_utils)
 
-  print("")
+  print()
 
   if args.operation is None:
     update_commands = generate_update_commands(db, git_utils, args.no_push)
@@ -213,13 +215,13 @@ def branches(args: argparse.Namespace) -> int:
 
   if len(update_commands) > 0 and not args.quiet:
     print(" && \\\n".join(update_commands))
-    print("")
+    print()
     if not args.no and (
       args.yes or ("PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?"))
     ):
       sys.stdout.flush()
       ret = subprocess.run(
-        " && ".join(update_commands), shell=True, stderr=subprocess.STDOUT
+        " && ".join(update_commands), shell=True, stderr=subprocess.STDOUT, check=False
       ).returncode
 
   return ret
@@ -237,7 +239,7 @@ def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> 
   for branch in db["local"]:
     row_dict = table_row(db, branch, git_utils, show_warnings)
     show_warnings = False
-    table.add_row(*[row_dict.get(column_key) for column_key in COLUMNS.keys()])
+    table.add_row(*[row_dict.get(column_key) for column_key in COLUMNS])
 
   return db
 
@@ -248,7 +250,7 @@ def create_db(
   branches: list[str] | None = None,
   ignore_behind: bool = False,
   short=False,
-  remote: dict[StrBranchName, dict] = None,
+  remote: dict[StrBranchName, dict] | None = None,
 ):
   if not default:
     default = git_utils.main_branch()
@@ -476,7 +478,7 @@ def table_row(
   row_dict["base"] = base_branch
   row_dict["origin"] = message_remote_sha
   row_dict["local"] = message_local_sha
-  row_dict["age"] = str((datetime.now(timezone.utc) - git_utils.date_authored(local_sha)).days)
+  row_dict["age"] = str((datetime.now(UTC) - git_utils.date_authored(local_sha)).days)
   row_dict["branch"] = branch
 
   if branch == git_utils.current_branch():
@@ -652,7 +654,6 @@ def construct_remote(
       if email != local_email:
         ret["shas_ahead_default_other_authors"].add(email)
 
-  default_sha = default_sha
   ret["distance_default_local"] = git_utils.distance(default_sha, remote_sha)
   for sha in git_utils.shas_ahead_of(default_sha, remote_sha):
     email = git_utils.commit_author_email(sha)
@@ -683,7 +684,7 @@ def generate_amend_commands(
     ignore_behind=True,
     remote=db["remote"],
   )
-  for branch, branchd in db["local"].items():
+  for branchd in db["local"].values():
     branchd["distance_default"] = (
       branchd["distance_default"][0] + 1,
       branchd["distance_default"][1],
@@ -825,7 +826,7 @@ def generate_update_commands(
 def rebase_command(
   branch_to_rebase: StrBranchName,
   base_branch: StrShaRef,
-  branches_safe_to_push: list[StrBranchName] = [],
+  branches_safe_to_push: list[StrBranchName] | None = None,
   starting_from: int | None = None,
 ) -> StrCommand:
   """Returns the rebase command for `branch_to_rebase`."""
@@ -838,7 +839,7 @@ def rebase_command(
   else:
     ret += f" && git rebase --onto {base_branch} {branch_to_rebase}~{starting_from}"
 
-  if branch_to_rebase in branches_safe_to_push:
+  if branch_to_rebase in (branches_safe_to_push or []):
     ret += " && git push -f"
 
   return ret
@@ -908,7 +909,7 @@ def rebase_order(
   """
   ret = []
 
-  for branch in base_branches.keys():
+  for branch in base_branches:
     for branch_to_rebase in rebase_order_for(branch, base_branches):
       if branch_to_rebase not in ret:
         ret.append(branch_to_rebase)
@@ -983,8 +984,7 @@ def base_branches_from_branches_ahead_refs(
   ret = {}
 
   for branch, refs in branches_ahead_refs:
-    commit_count = 0
-    for ref in reversed(refs):
+    for commit_count, ref in enumerate(reversed(refs)):
       result = re.search(r"^\s*(.*?)(?:~(\d+))?\s*$", ref)
       parent_branch = result.group(1)
       if parent_branch != branch:
@@ -994,7 +994,6 @@ def base_branches_from_branches_ahead_refs(
           behind = int(result.group(2))
         ret[branch] = (parent_branch, behind, commit_count)
         break
-      commit_count += 1
 
   return ret
 

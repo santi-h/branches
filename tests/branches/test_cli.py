@@ -1,14 +1,15 @@
 # Do not run these tests with the -s flag to pytest
 
-import pytest
+import json
 import os
+import re
 import shutil
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from subprocess import CompletedProcess
-import re
-from datetime import datetime, timezone, timedelta
-import json
+
+import pytest
 from pytest_httpserver.httpserver import HTTPServer
 
 GIT_TMP_DIRPATH_LOCAL = os.path.join(os.path.dirname(__file__), "test_cli_local")
@@ -29,7 +30,9 @@ def around_each():
 
 
 def run_command(command: str, dirpath: str = GIT_TMP_DIRPATH_LOCAL) -> CompletedProcess[str]:
-  return subprocess.run(f"cd '{dirpath}' && {command}", shell=True, capture_output=True, text=True)
+  return subprocess.run(
+    f"cd '{dirpath}' && {command}", shell=True, capture_output=True, text=True, check=False
+  )
 
 
 def run_test(
@@ -71,6 +74,7 @@ def run_test(
     shell=True,
     capture_output=True,
     text=True,
+    check=False,
   )
 
   if "SAVE_CLI_RESULT" in os.environ:
@@ -103,7 +107,7 @@ def run_test(
     )
 
   if len(cleanup_command or "") > 0:
-    subprocess.run(f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {cleanup_command}", shell=True)
+    subprocess.run(f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {cleanup_command}", shell=True, check=False)
 
 
 def commit(name: str, date: datetime | None = None, author: str | None = None) -> str:
@@ -132,7 +136,7 @@ def test_mockserver(httpserver):
   #       C     <- branch1
   #      /
   # A---B---D   <- main
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
@@ -236,7 +240,7 @@ def test_merged_base(httpserver: HTTPServer):
   #  /
   # A---D <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -372,7 +376,7 @@ def test_cli_misc():
   #             \       P  <- branch8
   #              \
   #               Q        <- branch9
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
@@ -833,7 +837,7 @@ def test_misc1():
     |/
     A---B  <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -877,7 +881,7 @@ def test_misc2():
     |    /
     A---B    <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -980,7 +984,7 @@ def test_cli_amend():
     ]
   )
 
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
@@ -1200,7 +1204,7 @@ def test_subdir():
   #   C       <- branch1
   #  /
   # A---B     <- main
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
@@ -1295,7 +1299,7 @@ def test_authors1():
    /
   A---B     <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   # Local branch has commits by a different author
@@ -1387,7 +1391,7 @@ def test_authors2():
       |    /
   A---B---C         <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1437,7 +1441,7 @@ def test_pulls1():
    /
   A---B     <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1489,7 +1493,7 @@ def test_pulls2():
    /
   A---B     <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1540,7 +1544,7 @@ def test_pulls3():
    /
   A---B     <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1586,7 +1590,7 @@ def test_pulls4():
        /
   A---B     <- main, branch1
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1625,7 +1629,7 @@ def test_pulls5():
        /
   A---B      <- main, branch1
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1665,7 +1669,7 @@ def test_pulls6():
        /
   A---B      <- main, branch1
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1709,7 +1713,7 @@ def test_pulls7():
      /
     A---B  <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1761,7 +1765,7 @@ def test_pulls8():
      /
     A---B  <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1802,7 +1806,7 @@ def test_pull_amend_base():
    /
   A---B     <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1852,7 +1856,7 @@ def test_no_main():
 
     A---B  <- branch1
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
@@ -1915,7 +1919,7 @@ def test_path_argument():
 
     A  <- main
   """
-  now = datetime.now(timezone.utc) - timedelta(hours=6)
+  now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_test(
