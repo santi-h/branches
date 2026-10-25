@@ -14,6 +14,7 @@ from pytest_httpserver.httpserver import HTTPServer
 
 GIT_TMP_DIRPATH_LOCAL = os.path.join(os.path.dirname(__file__), "test_cli_local")
 GIT_TMP_DIRPATH_ORIGIN = os.path.join(os.path.dirname(__file__), "test_cli_origin")
+GIT_TMP_DIRPATH_WORKTREE = os.path.join(os.path.dirname(__file__), "test_cli_worktree")
 SRC_DIRPATH = os.path.join(Path(__file__).resolve().parents[2], "src")
 
 
@@ -21,10 +22,12 @@ SRC_DIRPATH = os.path.join(Path(__file__).resolve().parents[2], "src")
 def around_each():
   shutil.rmtree(GIT_TMP_DIRPATH_ORIGIN, ignore_errors=True)
   shutil.rmtree(GIT_TMP_DIRPATH_LOCAL, ignore_errors=True)
+  shutil.rmtree(GIT_TMP_DIRPATH_WORKTREE, ignore_errors=True)
   os.makedirs(GIT_TMP_DIRPATH_ORIGIN)
   os.makedirs(GIT_TMP_DIRPATH_LOCAL)
   run_command("git init --bare .", GIT_TMP_DIRPATH_ORIGIN)
   yield
+  shutil.rmtree(GIT_TMP_DIRPATH_WORKTREE, ignore_errors=True)
   shutil.rmtree(GIT_TMP_DIRPATH_LOCAL, ignore_errors=True)
   shutil.rmtree(GIT_TMP_DIRPATH_ORIGIN, ignore_errors=True)
 
@@ -1942,4 +1945,41 @@ def test_path_argument():
     ],
     expected_returncode=0,
     directory=os.environ["HOME"],
+  )
+
+
+def test_worktree():
+  """
+  Description:
+    Tests what happens when a branch is checked out in a worktree
+
+  Setup:
+
+      B  <- branch1 (checked out in a worktree)
+     /
+    A    <- main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        "git push",
+        f"git worktree add -b branch1 '{GIT_TMP_DIRPATH_WORKTREE}'",
+        f"cd '{GIT_TMP_DIRPATH_WORKTREE}'",
+        commit("B", now + sec * 2),
+      ]
+    ),
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main            ",
+      r"          \w{5}    0  0 1  branch1         ",
+      r"                                           ",
+    ],
   )
