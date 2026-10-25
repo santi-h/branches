@@ -1982,3 +1982,583 @@ def test_worktree():
       r"                                          ",
     ],
   )
+
+
+def github_merge_and_rebase(branch_to_merge: str, branches_to_rebase: list[str]) -> list[str]:
+  """Returns commands that simulate GitHub merging a stacked PR
+
+  Squash-merges `branch_to_merge` into origin's main and deletes it from origin. Then, like GitHub
+  does for stacked PRs, each of `branches_to_rebase` (in stack order) has its own commit
+  cherry-picked on top of the previous one and is force pushed. Local branches are left untouched.
+  """
+  ret = [
+    "git checkout main",
+    f"git merge --squash {branch_to_merge}",
+    f"git commit -m '{branch_to_merge} (#1)'",
+    "git push",
+    f"git push origin --delete {branch_to_merge}",
+    "git checkout -b github_tmp",
+  ]
+  for branch in branches_to_rebase:
+    ret += [f"git cherry-pick {branch}", f"git push -f origin github_tmp:{branch}"]
+  ret += ["git checkout main", "git reset --hard HEAD~1", "git branch -D github_tmp"]
+  return ret
+
+
+def github_stack_pull_requests(rows: list[str], merged: str) -> list[tuple[str, list[dict]]]:
+  """Returns mock server expectations for `rows` (in table order)
+
+  `merged` gets a merged PR whose head is its local sha. Every other branch except main gets an open
+  PR whose head is its origin sha.
+  """
+  ret = []
+  for branch in rows:
+    remote = run_command(f"git ls-remote origin {branch}").stdout.split()
+    if branch == "main" or (not remote and branch != merged):
+      ret.append((branch, []))
+      continue
+
+    number = len([prs for _, prs in ret if prs]) + 1
+    pr = {
+      "number": number,
+      "title": branch,
+      "html_url": f"http://localhost/branches/test_cli_origin/pull/{number}",
+      "user": {"login": "santi-h"},
+    }
+    if branch == merged:
+      pr |= {
+        "state": "closed",
+        "merged_at": "2026-10-25T16:46:11Z",
+        "head": {"sha": run_command(f"git rev-parse {branch}").stdout.strip()},
+      }
+    else:
+      pr |= {"state": "open", "head": {"sha": remote[0]}}
+    ret.append((branch, [pr]))
+
+  return ret
+
+
+def run_prep(commands: list[str]):
+  result = run_command(" && ".join(commands))
+  assert result.returncode == 0, f"Prep stdout:\n{result.stdout}\nPrep stderr:\n{result.stderr}"
+
+
+def test_github_rebased1(httpserver: HTTPServer):
+  """
+  Description:
+    GitHub merged branch1 and rebased branch2 onto main. Locally, branch2 still sits on branch1.
+
+  Setup:
+
+        C'  <- origin/branch2
+       /
+      B'    <- origin/main
+     /
+    |   C   <- branch2
+    |  /
+    | B     <- branch1
+    |/
+    A       <- main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout -b branch2",
+      commit("C", now + sec * 3),
+      "git push",
+      *github_merge_and_rebase("branch1", ["branch2"]),
+      "git checkout branch2",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main                                  ",
+      r"  \w{5} Y \w{5}    0  0 2  branch2 branch1 #1 \(\w{5}\) by santi-h ",
+      r"          \w{5}    0  0 1  branch1         #2 \(\w{5}\) by santi-h ",
+      r"                                                                 ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git pull && \\",
+      r"git checkout branch2 && git rebase main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_github_rebased2(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_github_rebased1, but there is a local only branch3 stacked on top of branch2.
+
+  Setup:
+
+        C'      <- origin/branch2
+       /
+      B'        <- origin/main
+     /
+    |     D     <- * branch3
+    |    /
+    |   C       <- branch2
+    |  /
+    | B         <- branch1
+    |/
+    A           <- main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout -b branch2",
+      commit("C", now + sec * 3),
+      "git push",
+      "git checkout -b branch3",
+      commit("D", now + sec * 4),
+      *github_merge_and_rebase("branch1", ["branch2"]),
+      "git checkout branch3",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver, github_stack_pull_requests(["main", "branch3", "branch2", "branch1"], "branch1")
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main                                  ",
+      r"          \w{5}    0  0 3  branch3 branch2                       ",
+      r"  \w{5} Y \w{5}    0  0 2  branch2 branch1 #1 \(\w{5}\) by santi-h ",
+      r"          \w{5}    0  0 1  branch1         #2 \(\w{5}\) by santi-h ",
+      r"                                                                 ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git pull && \\",
+      r"git checkout branch2 && git rebase main && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_github_rebased3(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_github_rebased2, but branch3 was pushed so GitHub rebased it as well.
+
+  Setup:
+
+        D'      <- origin/branch3
+       /
+      C'        <- origin/branch2
+     /
+    B'          <- origin/main
+    |
+    |     D     <- * branch3
+    |    /
+    |   C       <- branch2
+    |  /
+    | B         <- branch1
+    |/
+    A           <- main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout -b branch2",
+      commit("C", now + sec * 3),
+      "git push",
+      "git checkout -b branch3",
+      commit("D", now + sec * 4),
+      "git push",
+      *github_merge_and_rebase("branch1", ["branch2", "branch3"]),
+      "git checkout branch3",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver, github_stack_pull_requests(["main", "branch3", "branch2", "branch1"], "branch1")
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main                                  ",
+      r"  \w{5} Y \w{5}    0  0 3  branch3 branch2 #1 \(\w{5}\) by santi-h ",
+      r"  \w{5} Y \w{5}    0  0 2  branch2 branch1 #2 \(\w{5}\) by santi-h ",
+      r"          \w{5}    0  0 1  branch1         #3 \(\w{5}\) by santi-h ",
+      r"                                                                 ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git pull && \\",
+      r"git checkout branch2 && git rebase main && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_github_rebased4(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_github_rebased1, but someone else pushed a commit to origin/branch2 after GitHub
+    rebased it. This should not be treated as a GitHub rebase.
+
+  Setup:
+
+        C'---E  <- !origin/branch2
+       /
+      B'        <- origin/main
+     /
+    |   C       <- branch2
+    |  /
+    | B         <- branch1
+    |/
+    A           <- main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout -b branch2",
+      commit("C", now + sec * 3),
+      "git push",
+      *github_merge_and_rebase("branch1", ["branch2"]),
+      "git checkout -b tmp origin/main",
+      "git cherry-pick branch2",
+      commit("E", now + sec * 5, "Name <me@git.com>"),
+      "git push -f origin tmp:branch2",
+      "git checkout branch2",
+      "git branch -D tmp",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main                                  ",
+      r" !\w{5} Y \w{5}    0  0 2  branch2 branch1 #1 \(\w{5}\) by santi-h ",
+      r"          \w{5}    0  0 1  branch1         #2 \(\w{5}\) by santi-h ",
+      r"                                                                 ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git pull && \\",
+      r"git checkout branch2 && git rebase main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_github_rebased5(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_github_rebased1, but origin/branch2's commit has a different diff than the local
+    one. This should not be treated as a GitHub rebase.
+
+  Setup:
+
+        C*  <- origin/branch2 (C' with a modified diff)
+       /
+      B'    <- origin/main
+     /
+    |   C   <- branch2
+    |  /
+    | B     <- branch1
+    |/
+    A       <- main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout -b branch2",
+      commit("C", now + sec * 3),
+      "git push",
+      *github_merge_and_rebase("branch1", ["branch2"]),
+      "git checkout -b tmp origin/main",
+      "git cherry-pick branch2",
+      "echo 'changed' >> C.txt && git commit -a --amend --no-edit",
+      "git push -f origin tmp:branch2",
+      "git checkout branch2",
+      "git branch -D tmp",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main                                  ",
+      r"  \w{5} Y \w{5}    0  0 2  branch2 branch1 #1 \(\w{5}\) by santi-h ",
+      r"          \w{5}    0  0 1  branch1         #2 \(\w{5}\) by santi-h ",
+      r"                                                                 ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git pull && \\",
+      r"git checkout branch2 && git rebase main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_github_rebased6(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_github_rebased1, but main was already pulled and branch1 deleted, so branch2 is
+    still checked out when it is reset.
+
+  Setup:
+
+        C'  <- origin/branch2
+       /
+      B'    <- main, origin/main
+     /
+    |   C   <- branch2
+    |  /
+    | B
+    |/
+    A
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout -b branch2",
+      commit("C", now + sec * 3),
+      "git push",
+      *github_merge_and_rebase("branch1", ["branch2"]),
+      "git pull",
+      "git branch -D branch1",
+      "git checkout branch2",
+    ]
+  )
+  set_mockserver_expectations(httpserver, github_stack_pull_requests(["main", "branch2"], ""))
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r"  \w{5} Y \w{5}    0  1 2  branch2      #1 \(\w{5}\) by santi-h ",
+      r"                                                              ",
+      r"git checkout branch2 && git rebase main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_github_rebased7(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_github_rebased1, but another PR was merged into main after GitHub rebased branch2.
+    Once reset, branch2 follows origin so rebasing it is followed by a force push.
+
+  Setup:
+
+        C'      <- origin/branch2
+       /
+      B'---E    <- origin/main
+     /
+    |   C       <- branch2
+    |  /
+    | B         <- branch1
+    |/
+    A           <- main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout -b branch2",
+      commit("C", now + sec * 3),
+      "git push",
+      *github_merge_and_rebase("branch1", ["branch2"]),
+      "git checkout -b tmp origin/main",
+      commit("E", now + sec * 5),
+      "git push origin tmp:main",
+      "git checkout branch2",
+      "git branch -D tmp",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main                                  ",
+      r"  \w{5} Y \w{5}    0  0 2  branch2 branch1 #1 \(\w{5}\) by santi-h ",
+      r"          \w{5}    0  0 1  branch1         #2 \(\w{5}\) by santi-h ",
+      r"                                                                 ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git pull && \\",
+      r"git checkout branch2 && git rebase main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_github_rebased8(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_github_rebased1, but branch3 (pushed, without a PR so GitHub did not rebase it) is
+    stacked on branch2, and a local only branch4 is stacked on branch3.
+
+  Setup:
+
+        C'          <- origin/branch2
+       /
+      B'            <- origin/main
+     /
+    |       E       <- branch4
+    |      /
+    |     D         <- branch3, origin/branch3
+    |    /
+    |   C           <- branch2
+    |  /
+    | B             <- branch1
+    |/
+    A               <- main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout -b branch2",
+      commit("C", now + sec * 3),
+      "git push",
+      "git checkout -b branch3",
+      commit("D", now + sec * 4),
+      "git push",
+      "git checkout -b branch4",
+      commit("E", now + sec * 5),
+      *github_merge_and_rebase("branch1", ["branch2"]),
+      "git checkout branch4",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver,
+    [
+      ("main", []),
+      ("branch4", []),
+      ("branch3", []),
+      *github_stack_pull_requests(["branch2", "branch1"], "branch1"),
+    ],
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main                                  ",
+      r"          \w{5}    0  0 4  branch4 branch3                       ",
+      r"  \w{5}   \w{5}    0  0 3  branch3 branch2                       ",
+      r"  \w{5} Y \w{5}    0  0 2  branch2 branch1 #1 \(\w{5}\) by santi-h ",
+      r"          \w{5}    0  0 1  branch1         #2 \(\w{5}\) by santi-h ",
+      r"                                                                 ",
+      r"git checkout main && \\",
+      r"git branch -D branch1 && \\",
+      r"git pull && \\",
+      r"git checkout branch2 && git rebase main && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1 && git push -f && \\",
+      r"git checkout branch4 && git rebase --onto branch3 branch4~1",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
