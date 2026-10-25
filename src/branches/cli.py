@@ -757,6 +757,7 @@ def generate_update_commands(
         current = branch
         branches_pulled.add(branch)
         db["local"][branch]["sha"] = branchd["sha"]
+        branchd["relationship"] = "="
 
   if branches_pulled:
     refresh_distances(db["local"], default, db["email"], git_utils)
