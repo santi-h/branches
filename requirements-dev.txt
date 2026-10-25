@@ -74,7 +74,7 @@ rich==14.3.3
     # via
     #   -c requirements.txt
     #   -r requirements.in
-ruff==0.15.8
+ruff==0.17.2
     # via -r requirements-dev.in
 smmap==5.0.3
     # via

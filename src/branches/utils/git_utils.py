@@ -1,8 +1,13 @@
 import os
+import re
+
 import git
 from git import Commit
 from gitdb.exc import BadName
-import re
+
+
+class NotAGitRepositoryError(Exception):
+  pass
 
 
 class GitUtils:
@@ -34,7 +39,7 @@ class GitUtils:
       self._repo = type(self).repo_from_path(repo_path)
 
     if self._repo is None:
-      raise Exception("Not a git repository")
+      raise NotAGitRepositoryError("Not a git repository")
 
     self._repo_path = self._repo.working_tree_dir
     self._cmd = git.cmd.Git(repo_path)
@@ -208,7 +213,7 @@ class GitUtils:
   def main_branch(self) -> str:
     try:
       origin_ref = self._repo.refs["origin/HEAD"]
-    except IndexError as exception:
+    except IndexError:
       for branch in ["main", "release", "master"]:
         if branch in self._repo.branches:
           return branch
@@ -217,7 +222,7 @@ class GitUtils:
       if branches:
         return branches[-1]
 
-      raise exception
+      raise
 
     origin_head = origin_ref.reference.name
     return re.search(r"\/([^\/]+?)\s*$", origin_head).group(1)
