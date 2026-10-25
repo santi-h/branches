@@ -1951,7 +1951,7 @@ def test_path_argument():
 def test_worktree():
   """
   Description:
-    Tests what happens when a branch is checked out in a worktree
+    Tests that branches checked out in another worktree are not displayed
 
   Setup:
 
@@ -1975,11 +1975,10 @@ def test_worktree():
     ),
     "branches",
     [
-      r"                                           ",
-      r" Origin - Local  Age <- -> Branch  Base PR ",
-      r" ───────────────────────────────────────── ",
-      r"  \w{5}   \w{5}    0  0 0  main            ",
-      r"          \w{5}    0  0 1  branch1         ",
-      r"                                           ",
+      r"                                          ",
+      r" Origin - Local  Age <- -> Branch Base PR ",
+      r" ──────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main           ",
+      r"                                          ",
     ],
   )
