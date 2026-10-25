@@ -801,6 +801,7 @@ def generate_update_commands(
 
   branches_pulled: set[StrBranchName] = set()
   branches_reset: set[StrBranchName] = set()
+  reset_old_shas: dict[StrSha, StrBranchName] = {}
   if not is_amend:
     for branch in sorted(db["remote"].keys() - branches_to_delete - {default}):
       branchd = db["remote"][branch]
@@ -815,11 +816,21 @@ def generate_update_commands(
         else:
           update_commands.append(f"git branch -f {branch} {branchd['sha']}")
         branches_reset.add(branch)
+        reset_old_shas[db["local"][branch]["sha"]] = branch
       else:
         continue
 
       db["local"][branch]["sha"] = branchd["sha"]
       branchd["relationship"] = "="
+
+  # Local branches stacked on top of a reset branch keep stacking on top of it
+  for branch, branchd in db["local"].items():
+    if branch in branches_reset:
+      continue
+    for shad in reversed(branchd["shas_ahead_default"]):
+      if shad["sha"] in reset_old_shas:
+        branchd["stacked_on"] = (reset_old_shas[shad["sha"]], shad["sha"])
+        break
 
   if branches_pulled or branches_reset:
     refresh_distances(db["local"], default, db["email"], git_utils)
@@ -829,7 +840,7 @@ def generate_update_commands(
   #
 
   for branch, branchd in db["local"].items():
-    if branchd["distance_default"][0]:
+    if branchd["distance_default"][0] or branchd.get("stacked_on"):
       branches_behind.add(branch)
   branches_behind.discard(default)
 
@@ -1008,6 +1019,9 @@ def refresh_bases(
   For each branch in local, it updates:
   - base
   - distance_base
+
+  A branch with "stacked_on" (base branch, old base sha) uses that base branch, unless it has a
+  closer base already. This keeps branches stacked on top of a branch that was reset to its origin.
   """
   ret = base_branches_from_branches_ahead_refs(branches_ahead_shas_to_refs(local))
 
@@ -1018,6 +1032,16 @@ def refresh_bases(
     else:
       branchd["base"] = default
       branchd["distance_base"] = branchd["distance_default"]
+
+    if branchd.get("stacked_on"):
+      base_branch, old_base_sha = branchd["stacked_on"]
+      shas = [shad["sha"] for shad in branchd["shas_ahead_default"]]
+      if old_base_sha in shas:
+        ahead = len(shas) - 1 - shas.index(old_base_sha)
+        if ahead < branchd["distance_base"][1]:
+          branchd["base"] = base_branch
+          branchd["distance_base"] = (0, ahead)
+          ret[branch] = (base_branch, 0, ahead)
 
   return ret
 
