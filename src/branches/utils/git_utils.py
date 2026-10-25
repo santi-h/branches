@@ -87,11 +87,23 @@ class GitUtils:
         "for-each-ref",
         "--sort=refname",
         "--sort=-authordate",
-        "--format=%(refname:short)",
+        "--format=%(refname:short)%00%(worktreepath)",
         "refs/heads/",
       ]
     ).split("\n")
-    return [branch.replace("*", "").strip() for branch in branches if branch]
+
+    # Skip branches checked out in a worktree other than this one
+    repo_path = os.path.realpath(self._repo_path)
+    ret = []
+    for line in branches:
+      if not line:
+        continue
+      branch, worktree_path = line.split("\0")
+      if worktree_path and os.path.realpath(worktree_path) != repo_path:
+        continue
+      ret.append(branch.replace("*", "").strip())
+
+    return ret
 
   def staged_changes_filepaths(self) -> list[str]:
     """Returns a list of filepaths. Each filepath has staged changes"""
