@@ -1,5 +1,6 @@
 import os
 import re
+import subprocess
 
 import git
 from git import Commit
@@ -166,6 +167,9 @@ class GitUtils:
     except BadName, git.exc.GitCommandError:
       return None
 
+  def merge_base(self, sha1: str, sha2: str) -> str:
+    return self._repo.merge_base(sha1, sha2)[0].hexsha
+
   def remote_shas(self, branches: str | list[str]) -> dict[str, str]:
     ret = {}
 
@@ -252,6 +256,30 @@ class GitUtils:
       ]
     )
     return [sha for sha in re.split(r"\s+", result.strip()) if sha.strip()]
+
+  def patch_ids(self, shas: list[str]) -> dict[str, str]:
+    """Returns the stable patch id (values) of each sha (keys)
+
+    Commits with an empty diff are left out.
+    """
+    if not shas:
+      return {}
+
+    diffs = self._cmd.execute(["git", "-C", self._repo_path, "show", "--format=commit %H", *shas])
+    result = subprocess.run(
+      ["git", "-C", self._repo_path, "patch-id", "--stable"],
+      input=diffs + "\n",
+      capture_output=True,
+      text=True,
+      check=True,
+    )
+
+    ret = {}
+    for line in result.stdout.splitlines():
+      patch_id, sha = line.split()
+      ret[sha] = patch_id
+
+    return ret
 
   def current_user_email(self) -> str | None:
     try:
