@@ -431,6 +431,8 @@ def table_row(
     row_dict["relationship"] = db["remote"][branch]["relationship"]
     if row_dict["relationship"] == "Y":
       row_dict["relationship"] = "[yellow]" + row_dict["relationship"] + "[/yellow]"
+    elif row_dict["relationship"] == "R":
+      row_dict["relationship"] = "[cyan]" + row_dict["relationship"] + "[/cyan]"
 
   if sync_status in ["synced", "unsynced"] and branch != default:
     owner, repo = git_utils.owner_and_repo()
@@ -569,7 +571,7 @@ def construct_empty_remote(remote_sha: StrSha) -> dict:
   return {
     "sha": remote_sha,
     "distance_local": None,
-    "relationship": None,  # one of [None, ">", "<", "Y"]
+    "relationship": None,  # one of [None, "=", ">", "<", "Y", "R"]
     "distance_default": None,
     "shas_ahead_default": [],
     "shas_ahead_default_other_authors": set(),
@@ -661,7 +663,56 @@ def construct_remote(
     if email != local_email and branch != default:
       ret["shas_ahead_default_local_other_authors"].add(email)
 
+  if (
+    ret["relationship"] == "Y"
+    and branch != default
+    and ret["shas_ahead_default"]
+    and not ret["shas_ahead_default_other_authors"]
+    and forks_from_newer_default(git_utils, local_sha, remote_sha, remote_default_sha)
+    and is_rebased_copy(
+      git_utils,
+      git_utils.shas_ahead_of(default_sha, local_sha),
+      [shad["sha"] for shad in ret["shas_ahead_default"]],
+    )
+  ):
+    ret["relationship"] = "R"
+
   return ret
+
+
+def forks_from_newer_default(
+  git_utils: GitUtils, local_sha: StrSha, remote_sha: StrSha, default_sha: StrSha
+) -> bool:
+  """Returns whether `remote_sha` forks from `default_sha` at a strictly newer point than `local_sha`
+
+  Resetting to a remote that forks from the same or an older point would move the branch backwards.
+  """
+  local_fork = git_utils.merge_base(local_sha, default_sha)
+  remote_fork = git_utils.merge_base(remote_sha, default_sha)
+  return local_fork != remote_fork and bool(git_utils.is_ancestor(local_fork, remote_fork))
+
+
+def is_rebased_copy(
+  git_utils: GitUtils, local_shas: list[StrSha], remote_shas: list[StrSha]
+) -> bool:
+  """Returns whether `remote_shas` are a rebased copy of the last commits in `local_shas`
+
+  This is what happens when GitHub merges the base PR of a stacked PR: it rebases the remaining
+  branches onto the default branch and force pushes them. Commits are considered the same when their
+  author and diff (patch id) are the same.
+  """
+  if not remote_shas or len(remote_shas) > len(local_shas):
+    return False
+
+  local_shas = local_shas[-len(remote_shas) :]
+  patch_ids = git_utils.patch_ids(local_shas + remote_shas)
+  for local_sha, remote_sha in zip(local_shas, remote_shas):
+    if local_sha not in patch_ids or patch_ids.get(local_sha) != patch_ids.get(remote_sha):
+      return False
+    if git_utils.commit_author_email(local_sha) != git_utils.commit_author_email(remote_sha):
+      return False
+
+  return True
 
 
 def generate_amend_commands(
