@@ -3004,3 +3004,49 @@ def test_github_rebased16(httpserver: HTTPServer):
     ],
     httpserver=httpserver,
   )
+
+
+def test_github_rebased17(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_github_rebased10, but origin/branch1 was fetched shallow, so locally it has no
+    parents and no merge base with main.
+
+  Setup:
+
+      B'  <- * branch1
+     /
+    | B   <- origin/branch1 (shallow)
+    |/
+    A     <- main, origin/main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+  tformat = "%Y-%m-%dT%H:%M:%S%z"
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      f"git commit --amend --no-edit --date='{(now + sec * 3).strftime(tformat)}'",
+      "git fetch --depth=1 origin branch1",
+    ]
+  )
+  set_mockserver_expectations(httpserver, github_stack_pull_requests(["main", "branch1"], ""))
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                          ",
+      r" Origin - Local  Age <- -> Branch Base PR ",
+      r" ──────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main           ",
+      r"                                          ",
+    ],
+    expected_returncode=1,
+    httpserver=httpserver,
+  )
