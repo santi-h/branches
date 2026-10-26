@@ -167,8 +167,14 @@ class GitUtils:
     except BadName, git.exc.GitCommandError:
       return None
 
-  def merge_base(self, sha1: str, sha2: str) -> str:
-    return self._repo.merge_base(sha1, sha2)[0].hexsha
+  def merge_base(self, sha1: str, sha2: str) -> str | None:
+    """
+    Returns:
+      The best common ancestor of `sha1` and `sha2`
+      None if there is none, e.g. when one of them was fetched shallow
+    """
+    bases = self._repo.merge_base(sha1, sha2)
+    return bases[0].hexsha if bases else None
 
   def remote_shas(self, branches: str | list[str]) -> dict[str, str]:
     ret = {}

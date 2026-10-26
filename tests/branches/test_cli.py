@@ -3041,12 +3041,12 @@ def test_github_rebased17(httpserver: HTTPServer):
     None,
     "branches",
     [
-      r"                                          ",
-      r" Origin - Local  Age <- -> Branch Base PR ",
-      r" ──────────────────────────────────────── ",
-      r"  \w{5}   \w{5}    0  0 0  main           ",
-      r"                                          ",
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r"  \w{5} Y \w{5}    0  0 1  branch1      #1 \(\w{5}\) by santi-h ",
+      r"                                                              ",
     ],
-    expected_returncode=1,
     httpserver=httpserver,
   )

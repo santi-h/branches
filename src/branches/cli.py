@@ -689,6 +689,8 @@ def forks_from_newer_default(
   """
   local_fork = git_utils.merge_base(local_sha, default_sha)
   remote_fork = git_utils.merge_base(remote_sha, default_sha)
+  if local_fork is None or remote_fork is None:
+    return False
   return local_fork != remote_fork and bool(git_utils.is_ancestor(local_fork, remote_fork))
 
 
