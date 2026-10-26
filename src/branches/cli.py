@@ -796,10 +796,11 @@ def generate_update_commands(
     refresh_distances(db["local"], default, db["email"], git_utils)
 
   #
-  # Populate branches_pulled
+  # Populate branches_pulled and branches_reset
   #
 
   branches_pulled: set[StrBranchName] = set()
+  branches_reset: set[StrBranchName] = set()
   if not is_amend:
     for branch in sorted(db["remote"].keys() - branches_to_delete - {default}):
       branchd = db["remote"][branch]
@@ -807,10 +808,20 @@ def generate_update_commands(
         update_commands.append(f"git checkout {branch} && git pull")
         current = branch
         branches_pulled.add(branch)
-        db["local"][branch]["sha"] = branchd["sha"]
-        branchd["relationship"] = "="
+      elif branchd["relationship"] == "R":
+        # Origin is a rebased copy of local (e.g. GitHub rebased a stacked PR). Follow origin.
+        if branch == current:
+          update_commands.append(f"git reset --keep {branchd['sha']}")
+        else:
+          update_commands.append(f"git branch -f {branch} {branchd['sha']}")
+        branches_reset.add(branch)
+      else:
+        continue
 
-  if branches_pulled:
+      db["local"][branch]["sha"] = branchd["sha"]
+      branchd["relationship"] = "="
+
+  if branches_pulled or branches_reset:
     refresh_distances(db["local"], default, db["email"], git_utils)
 
   #
