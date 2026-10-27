@@ -3429,3 +3429,183 @@ def test_locked8(httpserver: HTTPServer):
     ],
     httpserver=httpserver,
   )
+
+
+def squash_prep(now: datetime, sec: timedelta, author: str | None = None) -> list[str]:
+  """Returns commands that create branch1 with two commits and branches stacked around it
+
+  Setup:
+
+        D       <- branch2
+       /
+    B---C       <- branch1
+   /
+  A---E         <- main
+   \
+    F           <- branch3
+  """
+  return [
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git checkout -b branch1",
+    commit("B", now + sec * 2, author),
+    commit("C", now + sec * 3),
+    "git checkout -b branch2",
+    commit("D", now + sec * 4),
+    "git checkout main",
+    commit("E", now + sec * 5),
+    "git checkout main~1 && git checkout -b branch3",
+    commit("F", now + sec * 6),
+    "git checkout branch1",
+  ]
+
+
+def test_squash1():
+  """
+  Description:
+    Squashing C into B on branch1 suggests the squash and restacks branch2 on top of it.
+
+  Setup: see squash_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(squash_prep(now, sec))
+  run_test(None, "branches squash", [], expected_returncode=2)
+
+
+def test_squash2():
+  """
+  Description:
+    Same as test_squash1, but branch1 and branch2 are in sync with origin, so the squash suggests
+    force pushing them, unless --no-push is given.
+
+  Setup: see squash_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    squash_prep(now, sec)
+    + [
+      "git checkout main && git push",
+      "git checkout branch1 && git push",
+      "git checkout branch2 && git push",
+      "git checkout branch1",
+    ]
+  )
+  run_test(None, "branches squash", [], expected_returncode=2)
+  run_test(None, "branches squash --no-push", [], expected_returncode=2)
+
+
+def test_squash3():
+  """
+  Description:
+    Same as test_squash1, but runs the suggested commands. branch1 ends up with a single commit
+    that keeps B's message, and branch2 stays stacked on top of it.
+
+  Setup: see squash_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(squash_prep(now, sec))
+  run_test(None, "branches squash -y", [], expected_returncode=2)
+
+  assert run_command("git log -1 --format=%s branch1").stdout == "C.txt\n"
+  assert run_command("git rev-list --count main~1..branch1").stdout == "2\n"
+  assert run_command("git ls-tree --name-only branch1").stdout == "A.txt\nB.txt\nC.txt\n"
+  assert (
+    run_command("git rev-parse branch2~1").stdout == run_command("git rev-parse branch1").stdout
+  )
+  assert run_command("git status --porcelain").stdout == ""
+
+
+def test_squash4():
+  """
+  Description:
+    Same as test_squash2, but B was authored by someone else, so the squash does not suggest
+    force pushing branch1.
+
+  Setup: see squash_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    squash_prep(now, sec, "Name <me@git.com>")
+    + [
+      "git checkout main && git push",
+      "git checkout branch1 && git push",
+      "git checkout branch2 && git push",
+      "git checkout branch1",
+    ]
+  )
+  run_test(None, "branches squash", [], expected_returncode=2)
+
+
+def test_squash5():
+  """
+  Description:
+    Squashing is refused when there is no second to last commit on the current branch to squash
+    into: on the main branch, on a detached HEAD, on a branch with a single commit (branch3), and
+    on a branch whose second to last commit belongs to its base branch (branch2).
+
+  Setup: see squash_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(squash_prep(now, sec))
+  run_test("git checkout main", "branches squash", [], expected_returncode=2)
+  run_test("git checkout --detach branch1", "branches squash", [], expected_returncode=2)
+  run_test("git checkout branch3", "branches squash", [], expected_returncode=2)
+  run_test("git checkout branch2", "branches squash", [], expected_returncode=2)
+
+
+def test_squash6():
+  """
+  Description:
+    Squashing is refused when there are staged, unstaged, or untracked changes.
+
+  Setup: see squash_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(squash_prep(now, sec))
+  run_test(
+    "echo 'changed' >> C.txt && git add C.txt",
+    "branches squash",
+    [],
+    expected_returncode=2,
+    cleanup_command="git reset HEAD && git checkout .",
+  )
+  run_test(
+    "echo 'changed' >> C.txt",
+    "branches squash",
+    [],
+    expected_returncode=2,
+    cleanup_command="git checkout .",
+  )
+  run_test(
+    "echo 'new' > new.txt",
+    "branches squash",
+    [],
+    expected_returncode=2,
+    cleanup_command="git clean -fd",
+  )
+
+
+def test_squash7():
+  """
+  Description:
+    Squashing is refused when the current branch has merge commits.
+
+  Setup: see squash_prep, plus branch1 merges branch3
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(squash_prep(now, sec) + ["git merge --no-edit branch3", commit("G", now + sec * 7)])
+  run_test(None, "branches squash", [], expected_returncode=2)
