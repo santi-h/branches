@@ -974,7 +974,7 @@ def generate_update_commands(
       elif behind:
         base_branch += f"~{behind}"
 
-      update_commands.append(rebase_command(branch, base_branch, safe_to_push, ahead))
+      update_commands.append(rebase_command(branch, base_branch, safe_to_push, ahead, current))
       current = branch
 
       rebased_branches.add(branch)
@@ -992,21 +992,24 @@ def rebase_command(
   base_branch: StrShaRef,
   branches_safe_to_push: list[StrBranchName] | None = None,
   starting_from: int | None = None,
+  current: StrBranchName | None = None,
 ) -> StrCommand:
-  """Returns the rebase command for `branch_to_rebase`."""
-  ret = f"git checkout {branch_to_rebase}"
+  """Returns the rebase command for `branch_to_rebase`. Skips the checkout if it's `current`."""
+  commands = []
+  if branch_to_rebase != current:
+    commands.append(f"git checkout {branch_to_rebase}")
 
   if starting_from is None:
-    ret += f" && git rebase {base_branch}"
+    commands.append(f"git rebase {base_branch}")
   elif starting_from == 0:
-    ret += f" && git reset --hard {base_branch}"
+    commands.append(f"git reset --hard {base_branch}")
   else:
-    ret += f" && git rebase --onto {base_branch} {branch_to_rebase}~{starting_from}"
+    commands.append(f"git rebase --onto {base_branch} {branch_to_rebase}~{starting_from}")
 
   if branch_to_rebase in (branches_safe_to_push or []):
-    ret += " && git push -f"
+    commands.append("git push -f")
 
-  return ret
+  return " && ".join(commands)
 
 
 def branches_ahead_shas_to_refs(
