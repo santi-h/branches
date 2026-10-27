@@ -3050,3 +3050,396 @@ def test_github_rebased17(httpserver: HTTPServer):
     ],
     httpserver=httpserver,
   )
+
+
+def other_author_pull_requests(
+  rows: list[str], prs: dict[str, dict]
+) -> list[tuple[str, list[dict]]]:
+  """Returns mock server expectations for `rows` (in table order)
+
+  Each branch in `prs` gets a PR opened by another user whose head is its origin sha, with
+  `prs[branch]` merged into it. Every other branch gets no PR.
+  """
+  ret = []
+  for branch in rows:
+    if branch not in prs:
+      ret.append((branch, []))
+      continue
+
+    number = len([prs for _, prs in ret if prs]) + 1
+    pr = {
+      "number": number,
+      "title": branch,
+      "html_url": f"http://localhost/branches/test_cli_origin/pull/{number}",
+      "user": {"login": "someone"},
+      "head": {"sha": run_command(f"git rev-parse origin/{branch}").stdout.strip()},
+    }
+    ret.append((branch, [pr | prs[branch]]))
+
+  return ret
+
+
+def locked_prep(now: datetime, sec: timedelta) -> list[str]:
+  """Returns commands that create branch1 with a commit by another author, in sync with origin
+
+  Setup:
+
+      C   <- main, origin/main
+     /
+    | B   <- branch1, origin/branch1 (by another author)
+    |/
+    A
+  """
+  return [
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2, "Name <me@git.com>"),
+    "git push",
+    "git checkout main",
+    commit("C", now + sec * 3),
+    "git push",
+  ]
+
+
+def test_locked1(httpserver: HTTPServer):
+  """
+  Description:
+    branch1 has commits by another author, is in sync with origin, and has an open PR.
+
+  Setup: see locked_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(locked_prep(now, sec))
+  set_mockserver_expectations(
+    httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r" !\w{5}   \w{5}!   0  1 1  branch1      #1 \(\w{5}\) by someone ",
+      r"                                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked2(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked1, but the PR is a draft.
+
+  Setup: see locked_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(locked_prep(now, sec))
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open", "draft": True}}),
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r" !\w{5}   \w{5}!   0  1 1  branch1      #1 \(\w{5}\) by someone ",
+      r"                                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked3(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked1, but the PR was closed without merging.
+
+  Setup: see locked_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(locked_prep(now, sec))
+  set_mockserver_expectations(
+    httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "closed"}})
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r" !\w{5}   \w{5}!   0  1 1  branch1      #1 \(\w{5}\) by someone ",
+      r"                                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked4(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked1, but there is no PR.
+
+  Setup: see locked_prep
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(locked_prep(now, sec))
+  set_mockserver_expectations(httpserver, other_author_pull_requests(["main", "branch1"], {}))
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main            ",
+      r" !\w{5}   \w{5}!   0  1 1  branch1         ",
+      r"                                           ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked5(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked1, but local branch1 has a commit that is not in origin.
+
+  Setup:
+
+      C     <- main, origin/main
+     /
+    |   D   <- branch1
+    |  /
+    | B     <- origin/branch1 (by another author)
+    |/
+    A
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      *locked_prep(now, sec),
+      "git checkout branch1",
+      commit("D", now + sec * 4),
+      "git checkout main",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r" !\w{5} < \w{5}!   0  1 2  branch1      #1 \(\w{5}\) by someone ",
+      r"                                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked6(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked1, but branch1 has no commits by other authors.
+
+  Setup:
+
+      C   <- main, origin/main
+     /
+    | B   <- branch1, origin/branch1
+    |/
+    A
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+      commit("A", now + sec * 1),
+      "git push",
+      "git checkout -b branch1",
+      commit("B", now + sec * 2),
+      "git push",
+      "git checkout main",
+      commit("C", now + sec * 3),
+      "git push",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r"  \w{5}   \w{5}    0  1 1  branch1      #1 \(\w{5}\) by someone ",
+      r"                                                              ",
+      r"git checkout branch1 && git rebase main && git push -f && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked7(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked1, but there are local only branches stacked on top of branch1.
+
+  Setup:
+
+      C       <- main, origin/main
+     /
+    |     E   <- * branch3
+    |    /
+    |   D     <- branch2
+    |  /
+    | B       <- branch1, origin/branch1 (by another author)
+    |/
+    A
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      *locked_prep(now, sec),
+      "git checkout -b branch2 branch1",
+      commit("D", now + sec * 4),
+      "git checkout -b branch3",
+      commit("E", now + sec * 5),
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(
+      ["main", "branch3", "branch2", "branch1"], {"branch1": {"state": "open"}}
+    ),
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                                  ",
+      r"          \w{5}!   0  1 3  branch3 branch2                       ",
+      r"          \w{5}!   0  1 2  branch2 branch1                       ",
+      r" !\w{5}   \w{5}!   0  1 1  branch1         #1 \(\w{5}\) by someone ",
+      r"                                                                 ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked8(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked7, but branch1 got another commit after branch2 branched off of it.
+
+  Setup:
+
+      C       <- main, origin/main
+     /
+    |   F     <- branch1, origin/branch1 (by another author)
+    |  /
+    | | E     <- * branch3
+    | | |
+    | | D     <- branch2
+    | |/
+    | B       <- (by another author)
+    |/
+    A
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    [
+      *locked_prep(now, sec),
+      "git checkout -b branch2 branch1",
+      commit("D", now + sec * 4),
+      "git checkout -b branch3",
+      commit("E", now + sec * 5),
+      "git checkout branch1",
+      commit("F", now + sec * 6, "Name <me@git.com>"),
+      "git push",
+      "git checkout branch3",
+    ]
+  )
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(
+      ["main", "branch3", "branch1", "branch2"], {"branch1": {"state": "open"}}
+    ),
+  )
+  run_test(
+    None,
+    "branches",
+    [
+      r"                                                                   ",
+      r" Origin - Local  Age <- -> Branch  Base      PR                    ",
+      r" ───────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                                    ",
+      r"          \w{5}!   0  1 3  branch3 branch2                         ",
+      r" !\w{5}   \w{5}!   0  1 2  branch1           #1 \(\w{5}\) by someone ",
+      r"          \w{5}!   0  1 2  branch2 branch1~1                       ",
+      r"                                                                   ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1~1 branch2~1 && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
