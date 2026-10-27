@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import textwrap
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -38,8 +39,27 @@ def run_command(command: str, dirpath: str = GIT_TMP_DIRPATH_LOCAL) -> Completed
   )
 
 
+def run_prep(*commands: str):
+  result = run_command(" && ".join(commands))
+  assert result.returncode == 0, f"Prep stdout:\n{result.stdout}\nPrep stderr:\n{result.stderr}"
+
+
+def git_graph(dirpath: str = GIT_TMP_DIRPATH_LOCAL) -> str:
+  return run_command(
+    "git log --graph --all --author-date-order --pretty=format:'%<|(10)%gd%s%d'", dirpath
+  ).stdout
+
+
+def assert_graph(expected: str, dirpath: str = GIT_TMP_DIRPATH_LOCAL):
+  actual = git_graph(dirpath)
+  actual_lines = [line.rstrip() for line in actual.splitlines()]
+  assert actual_lines == textwrap.dedent(expected).strip().splitlines(), (
+    f"Unexpected git graph:\n{actual}"
+  )
+
+
 def run_test(
-  git_dir_prep_command: str | None,
+  expected_graph: str | None,
   trigger_command: str,
   expected_stdout: str | list[str],
   expected_returncode=0,
@@ -48,11 +68,8 @@ def run_test(
   trigger_command_dir: str | None = None,
   directory: str | None = None,
 ):
-  if len(git_dir_prep_command or "") > 0:
-    result = run_command(git_dir_prep_command)
-    assert result.returncode == 0, (
-      f"Prep command output:\n{result.stdout}\nPrep command stderr:\n{result.stderr}"
-    )
+  if expected_graph is not None:
+    assert_graph(expected_graph)
 
   envars = [f"PYTHONPATH='{SRC_DIRPATH}'"]
   if httpserver is not None:
@@ -114,11 +131,15 @@ def run_test(
 
 
 def commit(name: str, date: datetime | None = None, author: str | None = None) -> str:
-  ret = f"echo '{name}.txt' > {name}.txt && git add -A && git commit -m '{name}.txt'"
+  ret = f"echo '{name}.txt' > {name}.txt && git add -A && "
 
   if date:
+    # Committer date too, so the order in `git_graph` doesn't depend on timing
     tformat = "%Y-%m-%dT%H:%M:%S%z"
+    ret += f"GIT_COMMITTER_DATE='{date.strftime(tformat)}' git commit -m '{name}'"
     ret += f" --date='{date.strftime(tformat)}'"
+  else:
+    ret += f"git commit -m '{name}'"
 
   if author:
     ret += f" --author='{author}'"
@@ -136,12 +157,13 @@ def set_mockserver_expectations(httpserver, github_requests_expected):
 
 
 def test_mockserver(httpserver):
-  #       C     <- branch1
-  #      /
-  # A---B---D   <- main
+  """
+  Description:
+    Tests that PR info from the GitHub API shows up in the table, and that a merged PR whose head
+    is exactly the local sha suggests deleting the branch.
+  """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
-  tformat = "%Y-%m-%dT%H:%M:%S%z"
 
   set_mockserver_expectations(
     httpserver,
@@ -165,18 +187,25 @@ def test_mockserver(httpserver):
     ],
   )
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    commit("B", now + sec * 2),
+    "git checkout -b branch1",
+    commit("C", now + sec * 3),
+    "git checkout main",
+    commit("D", now + sec * 4),
+    "git push",
+  )
   run_test(
-    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN} && "
-    "echo 'A.txt' > A.txt && git add . && "
-    f"git commit -m 'A' --date='{(now + sec * 1).strftime(tformat)}' && git push && "
-    "echo 'B.txt' > B.txt && git add . && "
-    f"git commit -m 'B' --date='{(now + sec * 2).strftime(tformat)}' && "
-    "git checkout -b branch1 && "
-    "echo 'C.txt' > C.txt && git add . && "
-    f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}' && "
-    "git checkout main && "
-    "echo 'D.txt' > D.txt && git add . && "
-    f"git commit -m 'D' --date='{(now + sec * 4).strftime(tformat)}' && git push",
+    r"""
+    *         D (HEAD -> main, origin/main)
+    | *       C (branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches",
     [
       r"                                                                ",
@@ -217,8 +246,15 @@ def test_mockserver(httpserver):
     ],
   )
 
+  run_prep("git checkout branch1")
   run_test(
-    "git checkout branch1",
+    r"""
+    *         D (origin/main, main)
+    | *       C (HEAD -> branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches",
     [
       r"                                                                ",
@@ -237,29 +273,32 @@ def test_mockserver(httpserver):
 
 def test_merged_base(httpserver: HTTPServer):
   """
-  #     C <- branch2
-  #    /
-  #   B   <- branch1
-  #  /
-  # A---D <- main
+  Description:
+    Tests what happens when the base of a stacked branch has a merged PR: the base gets deleted and
+    the stacked branch gets rebased onto main.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git checkout main",
+    commit("D", now + sec * 4),
+    "git push",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        "git checkout -b branch1",
-        commit("B", now + sec * 2),
-        "git checkout -b branch2",
-        commit("C", now + sec * 3),
-        "git checkout main",
-        commit("D", now + sec * 4),
-        "git push",
-      ]
-    ),
+    r"""
+    *         D (HEAD -> main, origin/main)
+    | *       C (branch2)
+    | *       B (branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                              ",
@@ -301,7 +340,13 @@ def test_merged_base(httpserver: HTTPServer):
   )
 
   run_test(
-    None,
+    r"""
+    *         D (HEAD -> main, origin/main)
+    | *       C (branch2)
+    | *       B (branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                                   ",
@@ -341,8 +386,15 @@ def test_merged_base(httpserver: HTTPServer):
     ],
   )
 
+  run_prep("git checkout branch2")
   run_test(
-    "git checkout branch2",
+    r"""
+    *         D (origin/main, main)
+    | *       C (HEAD -> branch2)
+    | *       B (branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                                   ",
@@ -362,80 +414,81 @@ def test_merged_base(httpserver: HTTPServer):
 
 
 def test_cli_misc():
-  #                 G      <- branch6
-  #                /
-  #               | H---I  <- branch5
-  #               |/
-  #               F        <- branch3, branch4
-  #              /
-  #         D---E          <- branch2
-  #        /
-  #       C---J            <- branch1, branch10
-  #      /
-  # A---B---K---L---M      <- *main
-  #          \       \
-  #           \       O    <- branch7
-  #            \       \
-  #             \       P  <- branch8
-  #              \
-  #               Q        <- branch9
+  """
+  Description:
+    Tests a large tree of stacked, empty and duplicated branches, some of them pushed:
+      - `branches` and `branches -s` from main, and `-s` from branches in different stacks, which
+        only lists the stack of the current branch
+      - `branches -s -q`, which suggests no update commands
+      - `branches amend` with staged changes from the middle of a stack, from a branch with a
+        duplicate, and from a branch with nothing on top of it
+      - `branches amend` with no changes, and from main, which both fail
+      - `branches -y`, which runs the suggested commands, and running it again with nothing to do
+      - local main ahead of origin, behind origin, and deviated from origin
+  """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git checkout -b branch1",
+    commit("C", now + sec * 3),
+    "git push",
+    "git checkout -b branch2",
+    commit("D", now + sec * 4),
+    commit("E", now + sec * 5),
+    "git checkout -b branch3",
+    commit("F", now + sec * 6),
+    "git push",
+    "git checkout -b branch4",
+    "git checkout -b branch6",
+    commit("G", now + sec * 7),
+    "git checkout branch3",
+    "git checkout -b branch5",
+    commit("H", now + sec * 8),
+    commit("I", now + sec * 9),
+    "git checkout branch1",
+    commit("J", now + sec * 10),
+    "git checkout -b branch10",
+    "git checkout main",
+    commit("K", now + sec * 11),
+    commit("L", now + sec * 12),
+    commit("M", now + sec * 13),
+    "git checkout -b branch7",
+    commit("O", now + sec * 14),
+    "git checkout -b branch8",
+    commit("P", now + sec * 15),
+    "git checkout main~2",
+    "git checkout -b branch9",
+    commit("Q", now + sec * 16),
+    "git checkout main",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        "echo 'A.txt' > A.txt && git add .",
-        f"git commit -m 'A' --date='{(now + sec * 1).strftime(tformat)}'",
-        "echo 'B.txt' > B.txt && git add .",
-        f"git commit -m 'B' --date='{(now + sec * 2).strftime(tformat)}'",
-        "git checkout -b branch1",
-        "echo 'C.txt' > C.txt && git add .",
-        f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}' && git push",
-        "git checkout -b branch2",
-        "echo 'D.txt' > D.txt && git add .",
-        f"git commit -m 'D' --date='{(now + sec * 4).strftime(tformat)}'",
-        "echo 'E.txt' > E.txt && git add .",
-        f"git commit -m 'E' --date='{(now + sec * 5).strftime(tformat)}'",
-        "git checkout -b branch3",
-        "echo 'F.txt' > F.txt && git add .",
-        f"git commit -m 'F' --date='{(now + sec * 6).strftime(tformat)}' && git push",
-        "git checkout -b branch4",
-        "git checkout -b branch6",
-        "echo 'G.txt' > G.txt && git add .",
-        f"git commit -m 'G' --date='{(now + sec * 7).strftime(tformat)}'",
-        "git checkout branch3",
-        "git checkout -b branch5",
-        "echo 'H.txt' > H.txt && git add .",
-        f"git commit -m 'H' --date='{(now + sec * 8).strftime(tformat)}'",
-        "echo 'I.txt' > I.txt && git add .",
-        f"git commit -m 'I' --date='{(now + sec * 9).strftime(tformat)}'",
-        "git checkout branch1",
-        "echo 'J.txt' > J.txt && git add .",
-        f"git commit -m 'J' --date='{(now + sec * 10).strftime(tformat)}'",
-        "git checkout -b branch10",
-        "git checkout main",
-        "echo 'K.txt' > K.txt && git add .",
-        f"git commit -m 'K' --date='{(now + sec * 11).strftime(tformat)}'",
-        "echo 'L.txt' > L.txt && git add .",
-        f"git commit -m 'L' --date='{(now + sec * 12).strftime(tformat)}'",
-        "echo 'M.txt' > M.txt && git add .",
-        f"git commit -m 'M' --date='{(now + sec * 13).strftime(tformat)}'",
-        "git checkout -b branch7",
-        "echo 'O.txt' > O.txt && git add .",
-        f"git commit -m 'O' --date='{(now + sec * 14).strftime(tformat)}'",
-        "git checkout -b branch8",
-        "echo 'P.txt' > P.txt && git add .",
-        f"git commit -m 'P' --date='{(now + sec * 15).strftime(tformat)}'",
-        "git checkout main~2",
-        "git checkout -b branch9",
-        "echo 'Q.txt' > Q.txt && git add .",
-        f"git commit -m 'Q' --date='{(now + sec * 16).strftime(tformat)}'",
-        "git checkout main",
-      ]
-    ),
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (HEAD -> main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches",
     [
       r"                                                 ",
@@ -467,7 +520,28 @@ def test_cli_misc():
   )
 
   run_test(
-    None,
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (HEAD -> main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches -s",
     [
       r"                                          ",
@@ -478,8 +552,30 @@ def test_cli_misc():
     ],
   )
 
+  run_prep("git checkout branch2")
   run_test(
-    "git checkout branch2",
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (HEAD -> branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches -s",
     [
       r"                                                 ",
@@ -506,8 +602,30 @@ def test_cli_misc():
     ],
   )
 
+  run_prep("git checkout branch2 && echo test >> E.txt && git add E.txt")
   run_test(
-    "git checkout branch2 && echo test >> E.txt && git add E.txt",
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (HEAD -> branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches amend",
     [
       r"                                                 ",
@@ -533,8 +651,30 @@ def test_cli_misc():
     cleanup_command="git reset HEAD && git checkout .",
   )
 
+  run_prep("git checkout branch1")
   run_test(
-    "git checkout branch1",
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (HEAD -> branch1, branch10)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches -s",
     [
       r"                                                 ",
@@ -561,8 +701,30 @@ def test_cli_misc():
     ],
   )
 
+  run_prep("git checkout branch1 && echo test >> J.txt && git add J.txt")
   run_test(
-    "git checkout branch1 && echo test >> J.txt && git add J.txt",
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (HEAD -> branch1, branch10)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches amend",
     [
       r"                                                 ",
@@ -585,8 +747,30 @@ def test_cli_misc():
     cleanup_command="git reset HEAD && git checkout .",
   )
 
+  run_prep("git checkout branch10")
   run_test(
-    "git checkout branch10",
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (HEAD -> branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches -s",
     [
       r"                                                 ",
@@ -613,8 +797,30 @@ def test_cli_misc():
     ],
   )
 
+  run_prep("git checkout branch9")
   run_test(
-    "git checkout branch9",
+    r"""
+    *         Q (HEAD -> branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches -s",
     [
       r"                                           ",
@@ -628,8 +834,30 @@ def test_cli_misc():
     ],
   )
 
+  run_prep("git checkout branch9")
   run_test(
-    "git checkout branch9",
+    r"""
+    *         Q (HEAD -> branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches -s -q",
     [
       r"                                           ",
@@ -641,8 +869,30 @@ def test_cli_misc():
     ],
   )
 
+  run_prep("git checkout branch9 && echo test >> Q.txt && git add Q.txt")
   run_test(
-    "git checkout branch9 && echo test >> Q.txt && git add Q.txt",
+    r"""
+    *         Q (HEAD -> branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches amend",
     [
       r"                                           ",
@@ -657,8 +907,30 @@ def test_cli_misc():
     cleanup_command="git reset HEAD && git checkout .",
   )
 
+  run_prep("git checkout branch9")
   run_test(
-    "git checkout branch9",
+    r"""
+    *         Q (HEAD -> branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches amend",
     [
       r"                                           ",
@@ -673,8 +945,30 @@ def test_cli_misc():
     expected_returncode=1,
   )
 
+  run_prep("git checkout main && echo test >> A.txt && git add A.txt")
   run_test(
-    "git checkout main && echo test >> A.txt && git add A.txt",
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (HEAD -> main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches amend",
     [
       r"                                          ",
@@ -689,8 +983,30 @@ def test_cli_misc():
     cleanup_command="git reset HEAD && git checkout .",
   )
 
+  run_prep("git reset HEAD && git checkout . && git checkout main")
   run_test(
-    "git reset HEAD && git checkout . && git checkout main",
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    | *       M (HEAD -> main)
+    | *       L
+    |/
+    *         K
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | *       C (origin/branch1)
+    |/
+    *         B
+    *         A
+    """,
     "branches -y",
     [
       r"                                                 ",
@@ -752,8 +1068,32 @@ def test_cli_misc():
     ],
   )
 
+  run_prep("git checkout main")
   run_test(
-    "git checkout main",
+    r"""
+    *         Q (branch9)
+    | *       P (branch8)
+    | *       O (branch7)
+    |/
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | | *     C (origin/branch1)
+    | * |     C
+    |/ /
+    * |       M (HEAD -> main)
+    * |       L
+    * |       K
+    |/
+    *         B
+    *         A
+    """,
     "branches -y",
     [
       r"                                                 ",
@@ -775,14 +1115,38 @@ def test_cli_misc():
   )
 
   # When the local `main` is ahead and the remote sha is an ancestor
+  run_prep(
+    "git push",
+    "echo test >> Q.txt && git add Q.txt",
+    f"git commit -m 'Q' --date='{(now + sec * 17).strftime(tformat)}' --author='Name <me@git.com>'",
+  )
   run_test(
-    " && ".join(
-      [
-        "git push",
-        "echo test >> Q.txt && git add Q.txt",
-        f"git commit -m 'Q' --date='{(now + sec * 17).strftime(tformat)}' --author='Name <me@git.com>'",
-      ]
-    ),
+    r"""
+    *         Q (HEAD -> main)
+    | *       Q (branch9)
+    |/
+    | *       P (branch8)
+    | *       O (branch7)
+    |/
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | | *     C (origin/branch1)
+    | * |     C
+    |/ /
+    * |       M (origin/main)
+    * |       L
+    * |       K
+    |/
+    *         B
+    *         A
+    """,
     "branches -s",
     [
       r"                                          ",
@@ -794,8 +1158,34 @@ def test_cli_misc():
   )
 
   # When the remote `main` is ahead and the local sha is an ancestor
+  run_prep("git push && git reset --hard HEAD~1")
   run_test(
-    "git push && git reset --hard HEAD~1",
+    r"""
+    *         Q (origin/main)
+    | *       Q (branch9)
+    |/
+    | *       P (branch8)
+    | *       O (branch7)
+    |/
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | | *     C (origin/branch1)
+    | * |     C
+    |/ /
+    * |       M (HEAD -> main)
+    * |       L
+    * |       K
+    |/
+    *         B
+    *         A
+    """,
     "branches -s",
     [
       r"                                          ",
@@ -809,13 +1199,39 @@ def test_cli_misc():
   )
 
   # When the remote `main` and local `main` deviated
+  run_prep(
+    "echo test >> Q.txt && git add Q.txt",
+    f"git commit -m 'Q' --date='{(now + sec * 19).strftime(tformat)}'",
+  )
   run_test(
-    " && ".join(
-      [
-        "echo test >> Q.txt && git add Q.txt",
-        f"git commit -m 'Q' --date='{(now + sec * 19).strftime(tformat)}'",
-      ]
-    ),
+    r"""
+    *         Q (HEAD -> main)
+    | *       Q (origin/main)
+    |/
+    | *       Q (branch9)
+    |/
+    | *       P (branch8)
+    | *       O (branch7)
+    |/
+    | *       J (branch10, branch1)
+    | | *     I (branch5)
+    | | *     H
+    | | | *   G (branch6)
+    | | |/
+    | | *     F (origin/branch3, branch4, branch3)
+    | | *     E (branch2)
+    | | *     D
+    | |/
+    | | *     C (origin/branch1)
+    | * |     C
+    |/ /
+    * |       M
+    * |       L
+    * |       K
+    |/
+    *         B
+    *         A
+    """,
     "branches -s",
     [
       r"                                          ",
@@ -831,32 +1247,30 @@ def test_misc1():
   """
   Description:
     Tests what happens when the branch origin diverted, and local is behind.
-
-  Setup:
-
-      C    <- origin/branch1
-     /
-    | D    <- branch1
-    |/
-    A---B  <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch1 HEAD~1",
+    commit("C", now + sec * 3),
+    "git push",
+    "git reset --hard HEAD~1",
+    commit("D", now + sec * 4),
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git push",
-        "git checkout -b branch1 HEAD~1",
-        commit("C", now + sec * 3),
-        "git push",
-        "git reset --hard HEAD~1",
-        commit("D", now + sec * 4),
-      ]
-    ),
+    r"""
+    *         D (HEAD -> branch1)
+    | *       C (origin/branch1)
+    |/
+    | *       B (origin/main, main)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -875,32 +1289,29 @@ def test_misc2():
   """
   Description:
     Tests what happens when the branch origin diverted, and local is caught up and ahead.
-
-  Setup:
-
-      C      <- origin/branch1
-     /
-    |     D  <- branch1
-    |    /
-    A---B    <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch1 HEAD~1",
+    commit("C", now + sec * 3),
+    "git push",
+    "git reset --hard main",
+    commit("D", now + sec * 4),
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git push",
-        "git checkout -b branch1 HEAD~1",
-        commit("C", now + sec * 3),
-        "git push",
-        "git reset --hard main",
-        commit("D", now + sec * 4),
-      ]
-    ),
+    r"""
+    *         D (HEAD -> branch1)
+    | *       C (origin/branch1)
+    * |       B (origin/main, main)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -914,11 +1325,11 @@ def test_misc2():
 
 
 def test_cli_amend():
-  #     C---D <- branch2
-  #    /
-  #   B       <- branch1
-  #  /
-  # A         <- main
+  """
+  Description:
+    Tests `branches amend` when there is nothing to amend, when changes are amended into a branch
+    with branches stacked on top, and when those stacked branches are pushed or contain merges.
+  """
   file_content_a = "\\n".join(
     [
       "line1",
@@ -991,23 +1402,27 @@ def test_cli_amend():
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    f'echo "{file_content_a}" > testfile.txt && git add .',
+    f"git commit -m 'A' --date='{(now + sec * 1).strftime(tformat)}'",
+    "git checkout -b branch1",
+    f'echo "{file_content_b}" > testfile.txt && git add .',
+    f"git commit -m 'B' --date='{(now + sec * 2).strftime(tformat)}'",
+    "git checkout -b branch2",
+    f'echo "{file_content_c}" > testfile.txt && git add .',
+    f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}'",
+    f'echo "{file_content_d}" > testfile.txt && git add .',
+    f"git commit -m 'D' --date='{(now + sec * 3).strftime(tformat)}'",
+    "git checkout branch1",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        f'echo "{file_content_a}" > testfile.txt && git add .',
-        f"git commit -m 'A' --date='{(now + sec * 1).strftime(tformat)}'",
-        "git checkout -b branch1",
-        f'echo "{file_content_b}" > testfile.txt && git add .',
-        f"git commit -m 'B' --date='{(now + sec * 2).strftime(tformat)}'",
-        "git checkout -b branch2",
-        f'echo "{file_content_c}" > testfile.txt && git add .',
-        f"git commit -m 'C' --date='{(now + sec * 3).strftime(tformat)}'",
-        f'echo "{file_content_d}" > testfile.txt && git add .',
-        f"git commit -m 'D' --date='{(now + sec * 3).strftime(tformat)}'",
-        "git checkout branch1",
-      ]
-    ),
+    r"""
+    *         D (branch2)
+    *         C
+    *         B (HEAD -> branch1)
+    *         A (main)
+    """,
     "branches amend",
     [
       r"                                              ",
@@ -1040,8 +1455,14 @@ def test_cli_amend():
     ]
   )
 
+  run_prep(f'echo "{file_content_b_new}" > testfile.txt')
   run_test(
-    f'echo "{file_content_b_new}" > testfile.txt',
+    r"""
+    *         D (branch2)
+    *         C
+    *         B (HEAD -> branch1)
+    *         A (main)
+    """,
     "branches amend -y",
     [
       r"                                              ",
@@ -1067,7 +1488,12 @@ def test_cli_amend():
   )
 
   run_test(
-    None,
+    r"""
+    *         D (branch2)
+    *         C
+    *         B (HEAD -> branch1)
+    *         A (main)
+    """,
     "branches",
     [
       r"                                              ",
@@ -1116,8 +1542,14 @@ def test_cli_amend():
     ]
   )
 
+  run_prep("git checkout branch1 && git push && echo 'new file' > testnewfile.txt")
   run_test(
-    "git checkout branch1 && git push && echo 'new file' > testnewfile.txt",
+    r"""
+    *         D (branch2)
+    *         C
+    *         B (HEAD -> branch1, origin/branch1)
+    *         A (main)
+    """,
     "branches amend -y",
     [
       r"                                              ",
@@ -1154,8 +1586,18 @@ def test_cli_amend():
     "git checkout branch2 && git merge branch3"
   )
 
+  run_prep("git checkout branch2 && git push && echo 'file5' > file5.txt")
   run_test(
-    "git checkout branch2 && git push && echo 'file5' > file5.txt",
+    r"""
+    *         Merge branch 'branch3' into branch2 (HEAD -> branch2, origin/branch2)
+    |\
+    | *       yet another file (branch3)
+    * |       D
+    * |       C
+    * |       B (origin/branch1, branch1)
+    |/
+    *         A (main)
+    """,
     "branches amend",
     [
       r"                                            ",
@@ -1170,7 +1612,16 @@ def test_cli_amend():
   )
 
   run_test(
-    None,
+    r"""
+    *         Merge branch 'branch3' into branch2 (HEAD -> branch2, origin/branch2)
+    |\
+    | *       yet another file (branch3)
+    * |       D
+    * |       C
+    * |       B (origin/branch1, branch1)
+    |/
+    *         A (main)
+    """,
     "branches amend -y",
     [
       r"                                            ",
@@ -1185,8 +1636,18 @@ def test_cli_amend():
     cleanup_command="git clean -fd",
   )
 
+  run_prep("git checkout branch1 && git push && echo 'file5' > file5.txt")
   run_test(
-    "git checkout branch1 && git push && echo 'file5' > file5.txt",
+    r"""
+    *         Merge branch 'branch3' into branch2 (origin/branch2, branch2)
+    |\
+    | *       yet another file (branch3)
+    * |       D
+    * |       C
+    * |       B (HEAD -> branch1, origin/branch1)
+    |/
+    *         A (main)
+    """,
     "branches amend",
     [
       r"                                           ",
@@ -1202,33 +1663,36 @@ def test_cli_amend():
 
 
 def test_subdir():
-  #     D     <- branch2
-  #    /
-  #   C       <- branch1
-  #  /
-  # A---B     <- main
+  """
+  Description:
+    Tests running `branches amend` from a subdirectory of the repo.
+  """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    "echo 'A.txt' > A.txt && git add .",
+    f"git commit -m 'A.txt' --date='{(now + sec * 1).strftime(tformat)}'",
+    "echo 'B.txt' > B.txt && git add .",
+    f"git commit -m 'B.txt' --date='{(now + sec * 2).strftime(tformat)}'",
+    "git checkout -b branch1",
+    "mkdir ./subdir",
+    "echo 'subdir/C.txt' > subdir/C.txt && git add .",
+    f"git commit -m 'subdir/C.txt' --date='{(now + sec * 3).strftime(tformat)}'",
+    "git checkout -b branch2",
+    "echo 'D.txt' > D.txt && git add .",
+    f"git commit -m 'D.txt' --date='{(now + sec * 4).strftime(tformat)}'",
+    "git checkout branch1",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        "echo 'A.txt' > A.txt && git add .",
-        f"git commit -m 'A.txt' --date='{(now + sec * 1).strftime(tformat)}'",
-        "echo 'B.txt' > B.txt && git add .",
-        f"git commit -m 'B.txt' --date='{(now + sec * 2).strftime(tformat)}'",
-        "git checkout -b branch1",
-        "mkdir ./subdir",
-        "echo 'subdir/C.txt' > subdir/C.txt && git add .",
-        f"git commit -m 'subdir/C.txt' --date='{(now + sec * 3).strftime(tformat)}'",
-        "git checkout -b branch2",
-        "echo 'D.txt' > D.txt && git add .",
-        f"git commit -m 'D.txt' --date='{(now + sec * 4).strftime(tformat)}'",
-        "git checkout branch1",
-      ]
-    ),
+    r"""
+    *         D.txt (branch2)
+    *         subdir/C.txt (HEAD -> branch1)
+    *         B.txt (main)
+    *         A.txt
+    """,
     "branches",
     [
       r"                                              ",
@@ -1242,8 +1706,14 @@ def test_subdir():
     expected_returncode=0,
   )
 
+  run_prep("echo 'newline' >> A.txt")
   run_test(
-    "echo 'newline' >> A.txt",
+    r"""
+    *         D.txt (branch2)
+    *         subdir/C.txt (HEAD -> branch1)
+    *         B.txt (main)
+    *         A.txt
+    """,
     "branches amend",
     [
       r"                                              ",
@@ -1262,8 +1732,14 @@ def test_subdir():
     trigger_command_dir="subdir",
   )
 
+  run_prep("echo 'newline' >> A.txt")
   run_test(
-    "echo 'newline' >> A.txt",
+    r"""
+    *         D.txt (branch2)
+    *         subdir/C.txt (HEAD -> branch1)
+    *         B.txt (main)
+    *         A.txt
+    """,
     "branches amend -y",
     [
       r"                                              ",
@@ -1295,27 +1771,24 @@ def test_authors1():
   """
   Description:
     Tests different "other authors" scenarios
-
-  Setup:
-
-    C       <- branch1
-   /
-  A---B     <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   # Local branch has commits by a different author
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git checkout -b branch1",
+    commit("C", now + sec * 3, "Name <me@git.com>"),
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git checkout -b branch1",
-        commit("C", now + sec * 3, "Name <me@git.com>"),
-      ]
-    ),
+    r"""
+    *         C (HEAD -> branch1)
+    *         B (main)
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1329,8 +1802,13 @@ def test_authors1():
   )
 
   # Remote and local branch have commits by a different author, but main is not in origin
+  run_prep("git push")
   run_test(
-    "git push",
+    r"""
+    *         C (HEAD -> branch1, origin/branch1)
+    *         B (main)
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1344,8 +1822,13 @@ def test_authors1():
   )
 
   # Remote and local branch have commits by a different author, and main is in origin
+  run_prep("git checkout main && git push && git checkout branch1")
   run_test(
-    "git checkout main && git push && git checkout branch1",
+    r"""
+    *         C (HEAD -> branch1, origin/branch1)
+    *         B (origin/main, main)
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1361,8 +1844,15 @@ def test_authors1():
   # Remote branch only has commits by a different author
   git_name = run_command("git config --get user.name").stdout.strip()
   git_email = run_command("git config --get user.email").stdout.strip()
+  run_prep(f"git commit --amend --author='{git_name} <{git_email}>' --no-edit")
   run_test(
-    f"git commit --amend --author='{git_name} <{git_email}>' --no-edit",
+    r"""
+    *         C (HEAD -> branch1)
+    | *       C (origin/branch1)
+    |/
+    *         B (origin/main, main)
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1383,42 +1873,47 @@ def test_authors2():
       - main origin is ahead
       - the local branch is behind but got caught up via a merge commit
       - the origin branch deviated and was also caught up via a merge commit
-
-  Setup:
-
-          F---<D>   <- origin/branch1
-         /
-        E---G---<C> <- branch1
-       /
-      |     D       <- origin/main
-      |    /
-  A---B---C         <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1, "Name <me@git.com>"),
+    commit("B", now + sec * 2, "Name <me@git.com>"),
+    commit("C", now + sec * 3, "Name <me@git.com>"),
+    commit("D", now + sec * 4, "Name <me@git.com>"),
+    "git push",
+    "git checkout -b branch1 HEAD~2",
+    commit("E", now + sec * 5),
+    "git checkout -b tmp && git checkout branch1",
+    commit("F", now + sec * 6),
+    f"GIT_AUTHOR_DATE='{(now + sec * 8).isoformat()}' git merge main",
+    "git push",
+    "git reset --hard tmp && git branch -D tmp",
+    commit("G", now + sec * 7),
+    "git checkout main && git reset --hard HEAD~1",
+    "git checkout branch1",
+    f"GIT_AUTHOR_DATE='{(now + sec * 9).isoformat()}' git merge main",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1, "Name <me@git.com>"),
-        commit("B", now + sec * 2, "Name <me@git.com>"),
-        commit("C", now + sec * 3, "Name <me@git.com>"),
-        commit("D", now + sec * 4, "Name <me@git.com>"),
-        "git push",
-        "git checkout -b branch1 HEAD~2",
-        commit("E", now + sec * 5),
-        "git checkout -b tmp && git checkout branch1",
-        commit("F", now + sec * 6),
-        "git merge main",
-        "git push",
-        "git reset --hard tmp && git branch -D tmp",
-        commit("G", now + sec * 7),
-        "git checkout main && git reset --hard HEAD~1",
-        "git checkout branch1",
-        "git merge main",
-      ]
-    ),
+    r"""
+    *         Merge branch 'main' into branch1 (HEAD -> branch1)
+    |\
+    | | *     Merge branch 'main' into branch1 (origin/branch1)
+    | | |\
+    * | | |   G
+    | | * |   F
+    | |/ /
+    |/| |
+    * | |     E
+    | | *     D (origin/main)
+    | |/
+    | *       C (main)
+    |/
+    *         B
+    *         A
+    """,
     "branches",
     [
       r"                                            ",
@@ -1436,35 +1931,37 @@ def test_authors2():
 
 def test_pulls1():
   """
-        E   <- origin/branch2, branch3, origin/branch3
-       /
-      D     <- origin/branch1, branch2
-     /
-    C       <- branch1
-   /
-  A---B     <- main
+  Description:
+    Tests what happens when a stack of local branches is behind their origins and main is ahead:
+    pull each branch, then rebase the stack onto main.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch1 HEAD~1",
+    commit("C", now + sec * 3),
+    commit("D", now + sec * 4),
+    "git push",
+    "git checkout -b branch2",
+    commit("E", now + sec * 5),
+    "git checkout -b branch3 && git push",
+    "git checkout branch2 && git push && git reset --hard HEAD~1",
+    "git checkout branch1 && git reset --hard HEAD~1",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git push",
-        "git checkout -b branch1 HEAD~1",
-        commit("C", now + sec * 3),
-        commit("D", now + sec * 4),
-        "git push",
-        "git checkout -b branch2",
-        commit("E", now + sec * 5),
-        "git checkout -b branch3 && git push",
-        "git checkout branch2 && git push && git reset --hard HEAD~1",
-        "git checkout branch1 && git reset --hard HEAD~1",
-      ]
-    ),
+    r"""
+    *         E (origin/branch3, origin/branch2, branch3)
+    *         D (origin/branch1, branch2)
+    *         C (HEAD -> branch1)
+    | *       B (origin/main, main)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                              ",
@@ -1488,35 +1985,37 @@ def test_pulls1():
 
 def test_pulls2():
   """
-        E   <- branch3, origin/branch3
-       /
-      D     <- origin/branch1, origin/branch2, branch2
-     /
-    C       <- branch1
-   /
-  A---B     <- main
+  Description:
+    Tests what happens when a branch is behind its origin and a branch stacked on top points at the
+    same commit as it.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch1 HEAD~1",
+    commit("C", now + sec * 3),
+    commit("D", now + sec * 4),
+    "git push",
+    "git checkout -b branch2 && git push",
+    "git checkout -b branch3",
+    commit("E", now + sec * 5),
+    "git push",
+    "git checkout branch1 && git reset --hard HEAD~1",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git push",
-        "git checkout -b branch1 HEAD~1",
-        commit("C", now + sec * 3),
-        commit("D", now + sec * 4),
-        "git push",
-        "git checkout -b branch2 && git push",
-        "git checkout -b branch3",
-        commit("E", now + sec * 5),
-        "git push",
-        "git checkout branch1 && git reset --hard HEAD~1",
-      ]
-    ),
+    r"""
+    *         E (origin/branch3, branch3)
+    *         D (origin/branch2, origin/branch1, branch2)
+    *         C (HEAD -> branch1)
+    | *       B (origin/main, main)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                              ",
@@ -1539,34 +2038,36 @@ def test_pulls2():
 
 def test_pulls3():
   """
-        E   <- branch3, origin/branch3, origin/branch1
-       /
-      D     <- origin/branch2, branch2
-     /
-    C       <- branch1
-   /
-  A---B     <- main
+  Description:
+    Tests what happens when a branch is behind its origin by more than one commit and another branch
+    sits in the middle of it.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch1 HEAD~1",
+    commit("C", now + sec * 3),
+    commit("D", now + sec * 4),
+    commit("E", now + sec * 5),
+    "git push",
+    "git checkout -b branch3 && git push",
+    "git checkout -b branch2 HEAD~1 && git push",
+    "git checkout branch1 && git reset --hard HEAD~2",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git push",
-        "git checkout -b branch1 HEAD~1",
-        commit("C", now + sec * 3),
-        commit("D", now + sec * 4),
-        commit("E", now + sec * 5),
-        "git push",
-        "git checkout -b branch3 && git push",
-        "git checkout -b branch2 HEAD~1 && git push",
-        "git checkout branch1 && git reset --hard HEAD~2",
-      ]
-    ),
+    r"""
+    *         E (origin/branch3, origin/branch1, branch3)
+    *         D (origin/branch2, branch2)
+    *         C (HEAD -> branch1)
+    | *       B (origin/main, main)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                              ",
@@ -1589,25 +2090,28 @@ def test_pulls3():
 
 def test_pulls4():
   """
-        C    <- origin/main, origin/branch1
-       /
-  A---B     <- main, branch1
+  Description:
+    Tests what happens when main and a branch on the same commit are both one commit behind their
+    origins.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    commit("C", now + sec * 3),
+    "git push",
+    "git checkout -b branch1 && git push && git reset --hard HEAD~1",
+    "git checkout main && git reset --hard HEAD~1",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        commit("C", now + sec * 3),
-        "git push",
-        "git checkout -b branch1 && git push && git reset --hard HEAD~1",
-        "git checkout main && git reset --hard HEAD~1",
-      ]
-    ),
+    r"""
+    *         C (origin/main, origin/branch1)
+    *         B (HEAD -> main, branch1)
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1626,28 +2130,30 @@ def test_pulls4():
 
 def test_pulls5():
   """
-          D  <- origin/branch1
-         /
-        C    <- origin/main
-       /
-  A---B      <- main, branch1
+  Description:
+    Tests what happens when main and a branch on the same commit are behind their origins, with the
+    branch's origin ahead of main's origin.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    commit("C", now + sec * 3),
+    "git push",
+    commit("D", now + sec * 4),
+    "git checkout -b branch1 && git push && git reset --hard HEAD~2",
+    "git checkout main && git reset --hard HEAD~2",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        commit("C", now + sec * 3),
-        "git push",
-        commit("D", now + sec * 4),
-        "git checkout -b branch1 && git push && git reset --hard HEAD~2",
-        "git checkout main && git reset --hard HEAD~2",
-      ]
-    ),
+    r"""
+    *         D (origin/branch1)
+    *         C (origin/main)
+    *         B (HEAD -> main, branch1)
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1666,31 +2172,32 @@ def test_pulls5():
 
 def test_pulls6():
   """
-          D  <- origin/main
-         /
-        C    <- origin/branch1
-       /
-  A---B      <- main, branch1
+  Description:
+    Tests what happens when main and a branch on the same commit are behind their origins, with
+    main's origin ahead of the branch's origin: pull both, then rebase the branch onto main.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    commit("C", now + sec * 3),
+    commit("D", now + sec * 4),
+    "git push",
+    "git checkout -b branch1 HEAD~1 && git push && git reset --hard HEAD~1",
+    "git checkout main && git reset --hard HEAD~2",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        commit("C", now + sec * 3),
-        commit("D", now + sec * 4),
-        "git push",
-        "git checkout -b branch1 HEAD~1 && git push && git reset --hard HEAD~1",
-        "git checkout main && git reset --hard HEAD~2",
-      ]
-    ),
+    r"""
+    *         D (origin/main)
+    *         C (origin/branch1)
+    *         B (HEAD -> main, branch1)
+    *         A
+    """,
     "branches",
     [
-      # Undesired behavior
       r"                                           ",
       r" Origin - Local  Age <- -> Branch  Base PR ",
       r" ───────────────────────────────────────── ",
@@ -1708,33 +2215,33 @@ def test_pulls6():
 
 def test_pulls7():
   """
-  Setup:
-
-        D  <- branch2, origin/branch1
-       /
-      C    <- branch1
-     /
-    A---B  <- main
+  Description:
+    Tests `branches amend` when the current branch is behind its origin.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch1 HEAD~1",
+    commit("C", now + sec * 3),
+    commit("D", now + sec * 4),
+    "git push",
+    "git checkout -b branch2",
+    "git checkout branch1 && git reset --hard HEAD~1",
+    "echo 'change' >> C.txt",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git push",
-        "git checkout -b branch1 HEAD~1",
-        commit("C", now + sec * 3),
-        commit("D", now + sec * 4),
-        "git push",
-        "git checkout -b branch2",
-        "git checkout branch1 && git reset --hard HEAD~1",
-        "echo 'change' >> C.txt",
-      ]
-    ),
+    r"""
+    *         D (origin/branch1, branch2)
+    *         C (HEAD -> branch1)
+    | *       B (origin/main, main)
+    |/
+    *         A
+    """,
     "branches amend",
     [
       r"                                              ",
@@ -1759,32 +2266,29 @@ def test_pulls8():
     might be undesired. Probably not safe to rebase the local branch in this case automatically.
     We should let the user manually handle this case. The fact that there is other authors in origin
     might need to "pin" the local branch even if it's behind main.
-
-  Setup:
-
-        D  <- !origin/branch1
-       /
-      C    <- branch1
-     /
-    A---B  <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch1 HEAD~1",
+    commit("C", now + sec * 3),
+    commit("D", now + sec * 4, "Name <me@git.com>"),
+    "git push",
+    "git reset --hard HEAD~1",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git push",
-        "git checkout -b branch1 HEAD~1",
-        commit("C", now + sec * 3),
-        commit("D", now + sec * 4, "Name <me@git.com>"),
-        "git push",
-        "git reset --hard HEAD~1",
-      ]
-    ),
+    r"""
+    *         D (origin/branch1)
+    *         C (HEAD -> branch1)
+    | *       B (origin/main, main)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1801,36 +2305,38 @@ def test_pulls8():
 
 def test_pull_amend_base():
   """
-        E   <- origin/branch2, branch3, origin/branch3
-       /
-      D     <- origin/branch1, branch2
-     /
-    C       <- branch1
-   /
-  A---B     <- main
+  Description:
+    Tests `branches amend` when the current branch and the branch stacked on top of it are behind
+    their origins.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch1 HEAD~1",
+    commit("C", now + sec * 3),
+    commit("D", now + sec * 4),
+    "git push",
+    "git checkout -b branch2",
+    commit("E", now + sec * 5),
+    "git checkout -b branch3 && git push",
+    "git checkout branch2 && git push && git reset --hard HEAD~1",
+    "git checkout branch1 && git reset --hard HEAD~1",
+    "echo 'change' >> C.txt",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-        "git push",
-        "git checkout -b branch1 HEAD~1",
-        commit("C", now + sec * 3),
-        commit("D", now + sec * 4),
-        "git push",
-        "git checkout -b branch2",
-        commit("E", now + sec * 5),
-        "git checkout -b branch3 && git push",
-        "git checkout branch2 && git push && git reset --hard HEAD~1",
-        "git checkout branch1 && git reset --hard HEAD~1",
-        "echo 'change' >> C.txt",
-      ]
-    ),
+    r"""
+    *         E (origin/branch3, origin/branch2, branch3)
+    *         D (origin/branch1, branch2)
+    *         C (HEAD -> branch1)
+    | *       B (origin/main, main)
+    |/
+    *         A
+    """,
     "branches amend",
     [
       r"                                              ",
@@ -1854,22 +2360,20 @@ def test_no_main():
   """
   Description:
     Tests what happens when there is no main branch and no origin
-
-  Setup:
-
-    A---B  <- branch1
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    "git init && git checkout -b branch1",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+  )
   run_test(
-    " && ".join(
-      [
-        "git init && git checkout -b branch1",
-        commit("A", now + sec * 1),
-        commit("B", now + sec * 2),
-      ]
-    ),
+    r"""
+    *         B (HEAD -> branch1)
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1880,13 +2384,16 @@ def test_no_main():
     ],
   )
 
+  run_prep(
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+  )
   run_test(
-    " && ".join(
-      [
-        "git checkout -b branch2",
-        commit("C", now + sec * 3),
-      ]
-    ),
+    r"""
+    *         C (HEAD -> branch2)
+    *         B (branch1)
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -1917,16 +2424,15 @@ def test_path_argument():
   """
   Description:
     Tests the -C argument
-
-  Setup:
-
-    A  <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep("git init && " + commit("A", now + sec * 1))
   run_test(
-    "git init && " + commit("A", now + sec * 1),
+    r"""
+    *         A (HEAD -> main)
+    """,
     "branches",
     "Not a git repository.",
     expected_returncode=1,
@@ -1934,7 +2440,9 @@ def test_path_argument():
   )
 
   run_test(
-    None,
+    r"""
+    *         A (HEAD -> main)
+    """,
     f"branches -C '{GIT_TMP_DIRPATH_LOCAL}'",
     [
       r"                                          ",
@@ -1952,27 +2460,23 @@ def test_worktree():
   """
   Description:
     Tests that branches checked out in another worktree are not displayed
-
-  Setup:
-
-      B  <- branch1 (checked out in a worktree)
-     /
-    A    <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    f"git worktree add -b branch1 '{GIT_TMP_DIRPATH_WORKTREE}'",
+    f"cd '{GIT_TMP_DIRPATH_WORKTREE}'",
+    commit("B", now + sec * 2),
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        "git push",
-        f"git worktree add -b branch1 '{GIT_TMP_DIRPATH_WORKTREE}'",
-        f"cd '{GIT_TMP_DIRPATH_WORKTREE}'",
-        commit("B", now + sec * 2),
-      ]
-    ),
+    r"""
+    *         B (branch1)
+    *         A (HEAD -> main, origin/main)
+    """,
     "branches",
     [
       r"                                          ",
@@ -1994,7 +2498,7 @@ def github_merge_and_rebase(branch_to_merge: str, branches_to_rebase: list[str])
   ret = [
     "git checkout main",
     f"git merge --squash {branch_to_merge}",
-    f"git commit -m '{branch_to_merge} (#1)'",
+    f'git commit -m "$(git log -1 --format=%s {branch_to_merge})\' (#1)"',
     "git push",
     f"git push origin --delete {branch_to_merge}",
     "git checkout -b github_tmp",
@@ -2038,51 +2542,39 @@ def github_stack_pull_requests(rows: list[str], merged: str) -> list[tuple[str, 
   return ret
 
 
-def run_prep(commands: list[str]):
-  result = run_command(" && ".join(commands))
-  assert result.returncode == 0, f"Prep stdout:\n{result.stdout}\nPrep stderr:\n{result.stderr}"
-
-
 def test_github_rebased1(httpserver: HTTPServer):
   """
   Description:
     GitHub merged branch1 and rebased branch2 onto main. Locally, branch2 still sits on branch1.
-
-  Setup:
-
-        C'  <- origin/branch2
-       /
-      B'    <- origin/main
-     /
-    |   C   <- branch2
-    |  /
-    | B     <- branch1
-    |/
-    A       <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout branch2",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout branch2",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         C (origin/branch2)
+    *         B' (#1) (origin/main)
+    | *       C (HEAD -> branch2)
+    | *       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2107,46 +2599,38 @@ def test_github_rebased2(httpserver: HTTPServer):
   """
   Description:
     Same as test_github_rebased1, but there is a local only branch3 stacked on top of branch2.
-
-  Setup:
-
-        C'      <- origin/branch2
-       /
-      B'        <- origin/main
-     /
-    |     D     <- * branch3
-    |    /
-    |   C       <- branch2
-    |  /
-    | B         <- branch1
-    |/
-    A           <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      "git checkout -b branch3",
-      commit("D", now + sec * 4),
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout branch3",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    "git checkout -b branch3",
+    commit("D", now + sec * 4),
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout branch3",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch3", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         D (HEAD -> branch3)
+    | *       C (origin/branch2)
+    | *       B' (#1) (origin/main)
+    * |       C (branch2)
+    * |       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2172,49 +2656,40 @@ def test_github_rebased3(httpserver: HTTPServer):
   """
   Description:
     Same as test_github_rebased2, but branch3 was pushed so GitHub rebased it as well.
-
-  Setup:
-
-        D'      <- origin/branch3
-       /
-      C'        <- origin/branch2
-     /
-    B'          <- origin/main
-    |
-    |     D     <- * branch3
-    |    /
-    |   C       <- branch2
-    |  /
-    | B         <- branch1
-    |/
-    A           <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      "git checkout -b branch3",
-      commit("D", now + sec * 4),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2", "branch3"]),
-      "git checkout branch3",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    "git checkout -b branch3",
+    commit("D", now + sec * 4),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2", "branch3"]),
+    "git checkout branch3",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch3", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         D (origin/branch3)
+    | *       D (HEAD -> branch3)
+    * |       C (origin/branch2)
+    * |       B' (#1) (origin/main)
+    | *       C (branch2)
+    | *       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2242,47 +2717,41 @@ def test_github_rebased4(httpserver: HTTPServer):
   Description:
     Same as test_github_rebased1, but someone else pushed a commit to origin/branch2 after GitHub
     rebased it. This should not be treated as a GitHub rebase.
-
-  Setup:
-
-        C'---E  <- !origin/branch2
-       /
-      B'        <- origin/main
-     /
-    |   C       <- branch2
-    |  /
-    | B         <- branch1
-    |/
-    A           <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout -b tmp origin/main",
-      "git cherry-pick branch2",
-      commit("E", now + sec * 5, "Name <me@git.com>"),
-      "git push -f origin tmp:branch2",
-      "git checkout branch2",
-      "git branch -D tmp",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout -b tmp origin/main",
+    "git cherry-pick branch2",
+    commit("E", now + sec * 5, "Name <me@git.com>"),
+    "git push -f origin tmp:branch2",
+    "git checkout branch2",
+    "git branch -D tmp",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         E (origin/branch2)
+    | *       C (HEAD -> branch2)
+    * |       C
+    * |       B' (#1) (origin/main)
+    | *       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2307,47 +2776,40 @@ def test_github_rebased5(httpserver: HTTPServer):
   Description:
     Same as test_github_rebased1, but origin/branch2's commit has a different diff than the local
     one. This should not be treated as a GitHub rebase.
-
-  Setup:
-
-        C*  <- origin/branch2 (C' with a modified diff)
-       /
-      B'    <- origin/main
-     /
-    |   C   <- branch2
-    |  /
-    | B     <- branch1
-    |/
-    A       <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout -b tmp origin/main",
-      "git cherry-pick branch2",
-      "echo 'changed' >> C.txt && git commit -a --amend --no-edit",
-      "git push -f origin tmp:branch2",
-      "git checkout branch2",
-      "git branch -D tmp",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout -b tmp origin/main",
+    "git cherry-pick branch2",
+    "echo 'changed' >> C.txt && git commit -a --amend --no-edit",
+    "git push -f origin tmp:branch2",
+    "git checkout branch2",
+    "git branch -D tmp",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         C (origin/branch2)
+    *         B' (#1) (origin/main)
+    | *       C (HEAD -> branch2)
+    | *       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2372,42 +2834,35 @@ def test_github_rebased6(httpserver: HTTPServer):
   Description:
     Same as test_github_rebased1, but main was already pulled and branch1 deleted, so branch2 is
     still checked out when it is reset.
-
-  Setup:
-
-        C'  <- origin/branch2
-       /
-      B'    <- main, origin/main
-     /
-    |   C   <- branch2
-    |  /
-    | B
-    |/
-    A
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git pull",
-      "git branch -D branch1",
-      "git checkout branch2",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git pull",
+    "git branch -D branch1",
+    "git checkout branch2",
   )
   set_mockserver_expectations(httpserver, github_stack_pull_requests(["main", "branch2"], ""))
   run_test(
-    None,
+    r"""
+    *         C (origin/branch2)
+    *         B' (#1) (origin/main, origin/HEAD, main)
+    | *       C (HEAD -> branch2)
+    | *       B
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                              ",
@@ -2428,46 +2883,41 @@ def test_github_rebased7(httpserver: HTTPServer):
   Description:
     Same as test_github_rebased1, but another PR was merged into main after GitHub rebased branch2.
     Once reset, branch2 follows origin so rebasing it is followed by a force push.
-
-  Setup:
-
-        C'      <- origin/branch2
-       /
-      B'---E    <- origin/main
-     /
-    |   C       <- branch2
-    |  /
-    | B         <- branch1
-    |/
-    A           <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout -b tmp origin/main",
-      commit("E", now + sec * 5),
-      "git push origin tmp:main",
-      "git checkout branch2",
-      "git branch -D tmp",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout -b tmp origin/main",
+    commit("E", now + sec * 5),
+    "git push origin tmp:main",
+    "git checkout branch2",
+    "git branch -D tmp",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         E (origin/main)
+    | *       C (origin/branch2)
+    |/
+    *         B' (#1)
+    | *       C (HEAD -> branch2)
+    | *       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2493,45 +2943,27 @@ def test_github_rebased8(httpserver: HTTPServer):
   Description:
     Same as test_github_rebased1, but branch3 (pushed, without a PR so GitHub did not rebase it) is
     stacked on branch2, and a local only branch4 is stacked on branch3.
-
-  Setup:
-
-        C'          <- origin/branch2
-       /
-      B'            <- origin/main
-     /
-    |       E       <- branch4
-    |      /
-    |     D         <- branch3, origin/branch3
-    |    /
-    |   C           <- branch2
-    |  /
-    | B             <- branch1
-    |/
-    A               <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      "git checkout -b branch3",
-      commit("D", now + sec * 4),
-      "git push",
-      "git checkout -b branch4",
-      commit("E", now + sec * 5),
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout branch4",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    "git checkout -b branch3",
+    commit("D", now + sec * 4),
+    "git push",
+    "git checkout -b branch4",
+    commit("E", now + sec * 5),
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout branch4",
   )
   set_mockserver_expectations(
     httpserver,
@@ -2543,7 +2975,16 @@ def test_github_rebased8(httpserver: HTTPServer):
     ],
   )
   run_test(
-    None,
+    r"""
+    *         E (HEAD -> branch4)
+    *         D (origin/branch3, branch3)
+    | *       C (origin/branch2)
+    | *       B' (#1) (origin/main)
+    * |       C (branch2)
+    * |       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2573,38 +3014,32 @@ def test_github_rebased9(httpserver: HTTPServer):
     branch1 was rebased locally onto a newer main but not pushed. origin/branch1 has the same commit
     on an older base, so it is not a rebased copy (`R`) and resetting to it would move branch1
     backwards.
-
-  Setup:
-
-      B'  <- * branch1
-     /
-    X     <- main, origin/main
-    |
-    | B   <- origin/branch1
-    |/
-    A
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout main",
-      commit("X", now + sec * 3),
-      "git push",
-      "git checkout branch1",
-      "git rebase main",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout main",
+    commit("X", now + sec * 3),
+    "git push",
+    "git checkout branch1",
+    "git rebase main",
   )
   set_mockserver_expectations(httpserver, github_stack_pull_requests(["main", "branch1"], ""))
   run_test(
-    None,
+    r"""
+    *         B (HEAD -> branch1)
+    *         X (origin/main, main)
+    | *       B (origin/branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                              ",
@@ -2623,33 +3058,28 @@ def test_github_rebased10(httpserver: HTTPServer):
   Description:
     branch1 was amended locally (new date, same diff and author) but not pushed. origin/branch1 has
     the same commit on the same base, so it is not a rebased copy (`R`).
-
-  Setup:
-
-      B'  <- * branch1
-     /
-    | B   <- origin/branch1
-    |/
-    A     <- main, origin/main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      f"git commit --amend --no-edit --date='{(now + sec * 3).strftime(tformat)}'",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    f"git commit --amend --no-edit --date='{(now + sec * 3).strftime(tformat)}'",
   )
   set_mockserver_expectations(httpserver, github_stack_pull_requests(["main", "branch1"], ""))
   run_test(
-    None,
+    r"""
+    *         B (HEAD -> branch1)
+    | *       B (origin/branch1)
+    |/
+    *         A (origin/main, main)
+    """,
     "branches",
     [
       r"                                                              ",
@@ -2668,51 +3098,42 @@ def test_github_rebased11(httpserver: HTTPServer):
   Description:
     Same as test_github_rebased1, but branch2 has two commits. GitHub merged branch1 and rebased
     branch2 onto main. Locally, branch2 still sits on branch1.
-
-  Setup:
-
-          C2'  <- origin/branch2
-         /
-        C1'
-       /
-      B'       <- origin/main
-     /
-    |     C2   <- * branch2
-    |    /
-    |   C1
-    |  /
-    | B        <- branch1
-    |/
-    A          <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C1", now + sec * 3),
-      commit("C2", now + sec * 4),
-      "git push",
-      *github_merge_and_rebase("branch1", []),
-      "git checkout -b github_tmp origin/main",
-      "git cherry-pick branch1..branch2",
-      "git push -f origin github_tmp:branch2",
-      "git checkout branch2",
-      "git branch -D github_tmp",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C1", now + sec * 3),
+    commit("C2", now + sec * 4),
+    "git push",
+    *github_merge_and_rebase("branch1", []),
+    "git checkout -b github_tmp origin/main",
+    "git cherry-pick branch1..branch2",
+    "git push -f origin github_tmp:branch2",
+    "git checkout branch2",
+    "git branch -D github_tmp",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         C2 (origin/branch2)
+    | *       C2 (HEAD -> branch2)
+    * |       C1
+    * |       B' (#1) (origin/main)
+    | *       C1
+    | *       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2742,26 +3163,32 @@ def test_github_rebased12(httpserver: HTTPServer):
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout branch2",
-      commit("D", now + sec * 4),
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout branch2",
+    commit("D", now + sec * 4),
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         D (HEAD -> branch2)
+    | *       C (origin/branch2)
+    | *       B' (#1) (origin/main)
+    * |       C
+    * |       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2790,26 +3217,31 @@ def test_github_rebased13(httpserver: HTTPServer):
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout branch2",
-      "git commit --amend -m 'C reworded'",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout branch2",
+    "git commit --amend -m 'C reworded'",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         C reworded (HEAD -> branch2)
+    | *       C (origin/branch2)
+    | *       B' (#1) (origin/main)
+    * |       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2837,32 +3269,40 @@ def test_github_rebased14(httpserver: HTTPServer):
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
+  empty_date = (now + sec * 4).strftime("%Y-%m-%dT%H:%M:%S%z")
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git commit --allow-empty -m empty",
-      "git push",
-      *github_merge_and_rebase("branch1", []),
-      "git checkout -b github_tmp origin/main",
-      "git cherry-pick --allow-empty branch1..branch2",
-      "git push -f origin github_tmp:branch2",
-      "git checkout branch2",
-      "git branch -D github_tmp",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    f"GIT_COMMITTER_DATE='{empty_date}' git commit --allow-empty -m empty --date='{empty_date}'",
+    "git push",
+    *github_merge_and_rebase("branch1", []),
+    "git checkout -b github_tmp origin/main",
+    "git cherry-pick --allow-empty branch1..branch2",
+    "git push -f origin github_tmp:branch2",
+    "git checkout branch2",
+    "git branch -D github_tmp",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         empty (origin/branch2)
+    | *       empty (HEAD -> branch2)
+    * |       C
+    * |       B' (#1) (origin/main)
+    | *       C
+    | *       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2891,29 +3331,35 @@ def test_github_rebased15(httpserver: HTTPServer):
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout -b tmp origin/branch2",
-      commit("D", now + sec * 4),
-      "git push origin tmp:branch2",
-      "git checkout branch2",
-      "git branch -D tmp",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout -b tmp origin/branch2",
+    commit("D", now + sec * 4),
+    "git push origin tmp:branch2",
+    "git checkout branch2",
+    "git branch -D tmp",
   )
   set_mockserver_expectations(
     httpserver, github_stack_pull_requests(["main", "branch2", "branch1"], "branch1")
   )
   run_test(
-    None,
+    r"""
+    *         D (origin/branch2)
+    | *       C (HEAD -> branch2)
+    * |       C
+    * |       B' (#1) (origin/main)
+    | *       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -2938,51 +3384,43 @@ def test_github_rebased16(httpserver: HTTPServer):
   Description:
     Same as test_github_rebased1, but there are two local only branches, branch3 and branch4, both
     stacked directly on top of branch2.
-
-  Setup:
-
-        C'      <- origin/branch2
-       /
-      B'        <- origin/main
-     /
-    |     E     <- * branch4
-    |    /
-    |   | D     <- branch3
-    |   |/
-    |   C       <- branch2
-    |  /
-    | B         <- branch1
-    |/
-    A           <- main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout -b branch2",
-      commit("C", now + sec * 3),
-      "git push",
-      "git checkout -b branch3",
-      commit("D", now + sec * 4),
-      "git checkout -b branch4 branch2",
-      commit("E", now + sec * 5),
-      *github_merge_and_rebase("branch1", ["branch2"]),
-      "git checkout branch4",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("C", now + sec * 3),
+    "git push",
+    "git checkout -b branch3",
+    commit("D", now + sec * 4),
+    "git checkout -b branch4 branch2",
+    commit("E", now + sec * 5),
+    *github_merge_and_rebase("branch1", ["branch2"]),
+    "git checkout branch4",
   )
   set_mockserver_expectations(
     httpserver,
     github_stack_pull_requests(["main", "branch4", "branch3", "branch2", "branch1"], "branch1"),
   )
   run_test(
-    None,
+    r"""
+    *         E (HEAD -> branch4)
+    | *       D (branch3)
+    |/
+    | *       C (origin/branch2)
+    | *       B' (#1) (origin/main)
+    * |       C (branch2)
+    * |       B (branch1)
+    |/
+    *         A (main)
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -3011,34 +3449,28 @@ def test_github_rebased17(httpserver: HTTPServer):
   Description:
     Same as test_github_rebased10, but origin/branch1 was fetched shallow, so locally it has no
     parents and no merge base with main.
-
-  Setup:
-
-      B'  <- * branch1
-     /
-    | B   <- origin/branch1 (shallow)
-    |/
-    A     <- main, origin/main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
   tformat = "%Y-%m-%dT%H:%M:%S%z"
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      f"git commit --amend --no-edit --date='{(now + sec * 3).strftime(tformat)}'",
-      "git fetch --depth=1 origin branch1",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    f"git commit --amend --no-edit --date='{(now + sec * 3).strftime(tformat)}'",
+    "git fetch --depth=1 origin branch1",
   )
   set_mockserver_expectations(httpserver, github_stack_pull_requests(["main", "branch1"], ""))
   run_test(
-    None,
+    r"""
+    *         B (HEAD -> branch1)
+    | *       B (grafted, origin/branch1)
+    *         A (origin/main, main)
+    """,
     "branches",
     [
       r"                                                              ",
@@ -3080,16 +3512,7 @@ def other_author_pull_requests(
 
 
 def locked_prep(now: datetime, sec: timedelta) -> list[str]:
-  """Returns commands that create branch1 with a commit by another author, in sync with origin
-
-  Setup:
-
-      C   <- main, origin/main
-     /
-    | B   <- branch1, origin/branch1 (by another author)
-    |/
-    A
-  """
+  """Returns commands that create branch1 with a commit by another author, in sync with origin"""
   return [
     f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
     commit("A", now + sec * 1),
@@ -3107,18 +3530,21 @@ def test_locked1(httpserver: HTTPServer):
   """
   Description:
     branch1 has commits by another author, is in sync with origin, and has an open PR.
-
-  Setup: see locked_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(locked_prep(now, sec))
+  run_prep(*locked_prep(now, sec))
   set_mockserver_expectations(
     httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
   )
   run_test(
-    None,
+    r"""
+    *         C (HEAD -> main, origin/main)
+    | *       B (origin/branch1, branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                              ",
@@ -3136,19 +3562,22 @@ def test_locked2(httpserver: HTTPServer):
   """
   Description:
     Same as test_locked1, but the PR is a draft.
-
-  Setup: see locked_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(locked_prep(now, sec))
+  run_prep(*locked_prep(now, sec))
   set_mockserver_expectations(
     httpserver,
     other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open", "draft": True}}),
   )
   run_test(
-    None,
+    r"""
+    *         C (HEAD -> main, origin/main)
+    | *       B (origin/branch1, branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                              ",
@@ -3166,18 +3595,21 @@ def test_locked3(httpserver: HTTPServer):
   """
   Description:
     Same as test_locked1, but the PR was closed without merging.
-
-  Setup: see locked_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(locked_prep(now, sec))
+  run_prep(*locked_prep(now, sec))
   set_mockserver_expectations(
     httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "closed"}})
   )
   run_test(
-    None,
+    r"""
+    *         C (HEAD -> main, origin/main)
+    | *       B (origin/branch1, branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                              ",
@@ -3198,16 +3630,19 @@ def test_locked4(httpserver: HTTPServer):
   """
   Description:
     Same as test_locked1, but there is no PR.
-
-  Setup: see locked_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(locked_prep(now, sec))
+  run_prep(*locked_prep(now, sec))
   set_mockserver_expectations(httpserver, other_author_pull_requests(["main", "branch1"], {}))
   run_test(
-    None,
+    r"""
+    *         C (HEAD -> main, origin/main)
+    | *       B (origin/branch1, branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                           ",
@@ -3228,33 +3663,27 @@ def test_locked5(httpserver: HTTPServer):
   """
   Description:
     Same as test_locked1, but local branch1 has a commit that is not in origin.
-
-  Setup:
-
-      C     <- main, origin/main
-     /
-    |   D   <- branch1
-    |  /
-    | B     <- origin/branch1 (by another author)
-    |/
-    A
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      *locked_prep(now, sec),
-      "git checkout branch1",
-      commit("D", now + sec * 4),
-      "git checkout main",
-    ]
+    *locked_prep(now, sec),
+    "git checkout branch1",
+    commit("D", now + sec * 4),
+    "git checkout main",
   )
   set_mockserver_expectations(
     httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
   )
   run_test(
-    None,
+    r"""
+    *         D (branch1)
+    | *       C (HEAD -> main, origin/main)
+    * |       B (origin/branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                              ",
@@ -3275,36 +3704,31 @@ def test_locked6(httpserver: HTTPServer):
   """
   Description:
     Same as test_locked1, but branch1 has no commits by other authors.
-
-  Setup:
-
-      C   <- main, origin/main
-     /
-    | B   <- branch1, origin/branch1
-    |/
-    A
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-      commit("A", now + sec * 1),
-      "git push",
-      "git checkout -b branch1",
-      commit("B", now + sec * 2),
-      "git push",
-      "git checkout main",
-      commit("C", now + sec * 3),
-      "git push",
-    ]
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout main",
+    commit("C", now + sec * 3),
+    "git push",
   )
   set_mockserver_expectations(
     httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
   )
   run_test(
-    None,
+    r"""
+    *         C (HEAD -> main, origin/main)
+    | *       B (origin/branch1, branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                              ",
@@ -3325,30 +3749,16 @@ def test_locked7(httpserver: HTTPServer):
   """
   Description:
     Same as test_locked1, but there are local only branches stacked on top of branch1.
-
-  Setup:
-
-      C       <- main, origin/main
-     /
-    |     E   <- * branch3
-    |    /
-    |   D     <- branch2
-    |  /
-    | B       <- branch1, origin/branch1 (by another author)
-    |/
-    A
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      *locked_prep(now, sec),
-      "git checkout -b branch2 branch1",
-      commit("D", now + sec * 4),
-      "git checkout -b branch3",
-      commit("E", now + sec * 5),
-    ]
+    *locked_prep(now, sec),
+    "git checkout -b branch2 branch1",
+    commit("D", now + sec * 4),
+    "git checkout -b branch3",
+    commit("E", now + sec * 5),
   )
   set_mockserver_expectations(
     httpserver,
@@ -3357,7 +3767,14 @@ def test_locked7(httpserver: HTTPServer):
     ),
   )
   run_test(
-    None,
+    r"""
+    *         E (HEAD -> branch3)
+    *         D (branch2)
+    | *       C (origin/main, main)
+    * |       B (origin/branch1, branch1)
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                                 ",
@@ -3377,36 +3794,21 @@ def test_locked8(httpserver: HTTPServer):
   """
   Description:
     Same as test_locked7, but branch1 got another commit after branch2 branched off of it.
-
-  Setup:
-
-      C       <- main, origin/main
-     /
-    |   F     <- branch1, origin/branch1 (by another author)
-    |  /
-    | | E     <- * branch3
-    | | |
-    | | D     <- branch2
-    | |/
-    | B       <- (by another author)
-    |/
-    A
+    B and F are by another author.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    [
-      *locked_prep(now, sec),
-      "git checkout -b branch2 branch1",
-      commit("D", now + sec * 4),
-      "git checkout -b branch3",
-      commit("E", now + sec * 5),
-      "git checkout branch1",
-      commit("F", now + sec * 6, "Name <me@git.com>"),
-      "git push",
-      "git checkout branch3",
-    ]
+    *locked_prep(now, sec),
+    "git checkout -b branch2 branch1",
+    commit("D", now + sec * 4),
+    "git checkout -b branch3",
+    commit("E", now + sec * 5),
+    "git checkout branch1",
+    commit("F", now + sec * 6, "Name <me@git.com>"),
+    "git push",
+    "git checkout branch3",
   )
   set_mockserver_expectations(
     httpserver,
@@ -3415,7 +3817,16 @@ def test_locked8(httpserver: HTTPServer):
     ),
   )
   run_test(
-    None,
+    r"""
+    *         F (origin/branch1, branch1)
+    | *       E (HEAD -> branch3)
+    | *       D (branch2)
+    |/
+    | *       C (origin/main, main)
+    * |       B
+    |/
+    *         A
+    """,
     "branches",
     [
       r"                                                                   ",
@@ -3432,20 +3843,7 @@ def test_locked8(httpserver: HTTPServer):
 
 
 def squash_prep(now: datetime, sec: timedelta, author: str | None = None) -> list[str]:
-  r"""Returns commands that create branch1 with two commits and branches stacked around it
-
-  Setup:
-
-          D     <- branch2
-         /
-    B---C       <- branch1
-   / \
-  /   G         <- branch4
- /
-A---E           <- main
- \
-  F             <- branch3
-  """
+  """Returns commands that create branch1 with two commits and branches stacked around it"""
   return [
     f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
     commit("A", now + sec * 1),
@@ -3469,15 +3867,25 @@ def test_squash1():
   Description:
     Squashing C into B on branch1 suggests the squash and restacks branch2 and branch4 on top of
     it. branch4 branched off B, so it picks up C.
-
-  Setup: see squash_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(squash_prep(now, sec))
+  run_prep(*squash_prep(now, sec))
   run_test(
-    None,
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                                ",
@@ -3502,23 +3910,31 @@ def test_squash2():
   Description:
     Same as test_squash1, but branch1 and branch2 are in sync with origin, so the squash suggests
     force pushing them, unless --no-push is given.
-
-  Setup: see squash_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    squash_prep(now, sec)
-    + [
-      "git checkout main && git push",
-      "git checkout branch1 && git push",
-      "git checkout branch2 && git push",
-      "git checkout branch1",
-    ]
+    *squash_prep(now, sec),
+    "git checkout main && git push",
+    "git checkout branch1 && git push",
+    "git checkout branch2 && git push",
+    "git checkout branch1",
   )
   run_test(
-    None,
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (origin/main, main)
+    | |/
+    | | *     D (origin/branch2, branch2)
+    | | *     C (HEAD -> branch1, origin/branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                                ",
@@ -3537,7 +3953,19 @@ def test_squash2():
     ],
   )
   run_test(
-    None,
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (origin/main, main)
+    | |/
+    | | *     D (origin/branch2, branch2)
+    | | *     C (HEAD -> branch1, origin/branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash --no-push",
     [
       r"                                                ",
@@ -3562,15 +3990,25 @@ def test_squash3():
   Description:
     Same as test_squash1, but runs the suggested commands. branch1 ends up with a single commit
     that keeps B's message, and branch2 and branch4 are stacked on top of it.
-
-  Setup: see squash_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(squash_prep(now, sec))
+  run_prep(*squash_prep(now, sec))
   run_test(
-    None,
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash -y",
     [
       r"                                                ",
@@ -3586,7 +4024,7 @@ def test_squash3():
       r"git checkout branch4 && git rebase --onto branch1 branch4~1 && \\",
       r"git checkout branch1",
       r"",
-      r"\[branch1 \w{7}\] B.txt",
+      r"\[branch1 \w{7}\] B",
       r" Date: .*",
       r" 2 files changed, 2 insertions\(\+\)",
       r" create mode 100644 B.txt",
@@ -3601,7 +4039,7 @@ def test_squash3():
     ],
   )
 
-  assert run_command("git log -1 --format=%s branch1").stdout == "B.txt\n"
+  assert run_command("git log -1 --format=%s branch1").stdout == "B\n"
   assert run_command("git rev-list --count main~1..branch1").stdout == "1\n"
   assert run_command("git ls-tree --name-only branch1").stdout == "A.txt\nB.txt\nC.txt\n"
   assert (
@@ -3618,23 +4056,31 @@ def test_squash4():
   Description:
     Same as test_squash2, but B was authored by someone else, so the squash does not suggest
     force pushing branch1.
-
-  Setup: see squash_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
   run_prep(
-    squash_prep(now, sec, "Name <me@git.com>")
-    + [
-      "git checkout main && git push",
-      "git checkout branch1 && git push",
-      "git checkout branch2 && git push",
-      "git checkout branch1",
-    ]
+    *squash_prep(now, sec, "Name <me@git.com>"),
+    "git checkout main && git push",
+    "git checkout branch1 && git push",
+    "git checkout branch2 && git push",
+    "git checkout branch1",
   )
   run_test(
-    None,
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (origin/main, main)
+    | |/
+    | | *     D (origin/branch2, branch2)
+    | | *     C (HEAD -> branch1, origin/branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                                ",
@@ -3660,15 +4106,26 @@ def test_squash5():
     Squashing is refused when there is no second to last commit on the current branch to squash
     into: on the main branch, on a detached HEAD, on a branch with a single commit (branch3), and
     on a branch whose second to last commit belongs to its base branch (branch2).
-
-  Setup: see squash_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(squash_prep(now, sec))
+  run_prep(*squash_prep(now, sec))
+  run_prep("git checkout main")
   run_test(
-    "git checkout main",
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (HEAD -> main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                          ",
@@ -3681,8 +4138,21 @@ def test_squash5():
     ],
     expected_returncode=1,
   )
+  run_prep("git checkout --detach branch1")
   run_test(
-    "git checkout --detach branch1",
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD, branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                          ",
@@ -3695,8 +4165,21 @@ def test_squash5():
     ],
     expected_returncode=1,
   )
+  run_prep("git checkout branch3")
   run_test(
-    "git checkout branch3",
+    r"""
+    *         G (branch4)
+    | *       F (HEAD -> branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                           ",
@@ -3710,8 +4193,21 @@ def test_squash5():
     ],
     expected_returncode=1,
   )
+  run_prep("git checkout branch2")
   run_test(
-    "git checkout branch2",
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (HEAD -> branch2)
+    | | *     C (branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                                ",
@@ -3733,15 +4229,26 @@ def test_squash6():
   """
   Description:
     Squashing is refused when there are staged, unstaged, or untracked changes.
-
-  Setup: see squash_prep
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(squash_prep(now, sec))
+  run_prep(*squash_prep(now, sec))
+  run_prep("echo 'changed' >> C.txt && git add C.txt")
   run_test(
-    "echo 'changed' >> C.txt && git add C.txt",
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                                ",
@@ -3758,8 +4265,21 @@ def test_squash6():
     expected_returncode=1,
     cleanup_command="git reset HEAD && git checkout .",
   )
+  run_prep("echo 'changed' >> C.txt")
   run_test(
-    "echo 'changed' >> C.txt",
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                                ",
@@ -3776,8 +4296,21 @@ def test_squash6():
     expected_returncode=1,
     cleanup_command="git checkout .",
   )
+  run_prep("echo 'new' > new.txt")
   run_test(
-    "echo 'new' > new.txt",
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                                ",
@@ -3800,15 +4333,35 @@ def test_squash7():
   """
   Description:
     Squashing is refused when the current branch has merge commits.
-
-  Setup: see squash_prep, plus branch1 merges branch3
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(squash_prep(now, sec) + ["git merge --no-edit branch3", commit("H", now + sec * 8)])
+  run_prep(
+    *squash_prep(now, sec),
+    "git merge --no-edit branch3",
+    commit("H", now + sec * 8),
+  )
   run_test(
-    None,
+    r"""
+    *         H (HEAD -> branch1)
+    *         Merge branch 'branch3' into branch1
+    |\
+    | | *     G (branch4)
+    | * |     F (branch3)
+    | | | *   E (main)
+    | | |/
+    | |/|
+    | | | *   D (branch2)
+    | |_|/
+    |/| |
+    * | |     C
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
     "branches squash",
     [
       r"                                            ",
@@ -3828,30 +4381,26 @@ def test_rebase_current1():
   Description:
     Rebasing the current branch doesn't check it out first. Local main is ahead of origin/main, so
     there's no pull to move away from the current branch (#53).
-
-  Setup:
-
-    C      <- next, origin/next
-   /
-  A---B    <- main
-  ^
-  origin/main
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push -u origin main",
+    commit("B", now + sec * 2),
+    "git checkout -b next HEAD~1",
+    commit("C", now + sec * 3),
+    "git push -u origin next",
+  )
   run_test(
-    " && ".join(
-      [
-        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
-        commit("A", now + sec * 1),
-        "git push -u origin main",
-        commit("B", now + sec * 2),
-        "git checkout -b next HEAD~1",
-        commit("C", now + sec * 3),
-        "git push -u origin next",
-      ]
-    ),
+    r"""
+    *         C (HEAD -> next, origin/next)
+    | *       B (main)
+    |/
+    *         A (origin/main)
+    """,
     "branches",
     [
       r"                                          ",
