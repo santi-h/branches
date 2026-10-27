@@ -3432,17 +3432,19 @@ def test_locked8(httpserver: HTTPServer):
 
 
 def squash_prep(now: datetime, sec: timedelta, author: str | None = None) -> list[str]:
-  """Returns commands that create branch1 with two commits and branches stacked around it
+  r"""Returns commands that create branch1 with two commits and branches stacked around it
 
   Setup:
 
-        D       <- branch2
-       /
+          D     <- branch2
+         /
     B---C       <- branch1
-   /
-  A---E         <- main
-   \
-    F           <- branch3
+   / \
+  /   G         <- branch4
+ /
+A---E           <- main
+ \
+  F             <- branch3
   """
   return [
     f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
@@ -3452,6 +3454,8 @@ def squash_prep(now: datetime, sec: timedelta, author: str | None = None) -> lis
     commit("C", now + sec * 3),
     "git checkout -b branch2",
     commit("D", now + sec * 4),
+    "git checkout branch1~1 && git checkout -b branch4",
+    commit("G", now + sec * 7),
     "git checkout main",
     commit("E", now + sec * 5),
     "git checkout main~1 && git checkout -b branch3",
@@ -3463,7 +3467,8 @@ def squash_prep(now: datetime, sec: timedelta, author: str | None = None) -> lis
 def test_squash1():
   """
   Description:
-    Squashing C into B on branch1 suggests the squash and restacks branch2 on top of it.
+    Squashing C into B on branch1 suggests the squash and restacks branch2 and branch4 on top of
+    it. branch4 branched off B, so it picks up C.
 
   Setup: see squash_prep
   """
@@ -3502,7 +3507,7 @@ def test_squash3():
   """
   Description:
     Same as test_squash1, but runs the suggested commands. branch1 ends up with a single commit
-    that keeps B's message, and branch2 stays stacked on top of it.
+    that keeps B's message, and branch2 and branch4 are stacked on top of it.
 
   Setup: see squash_prep
   """
@@ -3517,6 +3522,9 @@ def test_squash3():
   assert run_command("git ls-tree --name-only branch1").stdout == "A.txt\nB.txt\nC.txt\n"
   assert (
     run_command("git rev-parse branch2~1").stdout == run_command("git rev-parse branch1").stdout
+  )
+  assert (
+    run_command("git rev-parse branch4~1").stdout == run_command("git rev-parse branch1~1").stdout
   )
   assert run_command("git status --porcelain").stdout == ""
 
@@ -3607,5 +3615,5 @@ def test_squash7():
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
 
-  run_prep(squash_prep(now, sec) + ["git merge --no-edit branch3", commit("G", now + sec * 7)])
+  run_prep(squash_prep(now, sec) + ["git merge --no-edit branch3", commit("H", now + sec * 8)])
   run_test(None, "branches squash", [], expected_returncode=2)
