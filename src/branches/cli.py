@@ -434,6 +434,9 @@ def table_row(
     elif row_dict["relationship"] == "R":
       row_dict["relationship"] = "[cyan]" + row_dict["relationship"] + "[/cyan]"
 
+  if is_locked(db, branch):
+    row_dict["relationship"] = "[magenta]L[/magenta]"
+
   if sync_status in ["synced", "unsynced"] and branch != default:
     owner, repo = git_utils.owner_and_repo()
     url = f"https://github.com/{owner}/{repo}/tree/{branch}"
@@ -492,6 +495,20 @@ def table_row(
     row_dict["ahead"] = f"{row_dict['ahead']} [{MERGE_COMMIT_COLOR}]M[/{MERGE_COMMIT_COLOR}]"
 
   return row_dict
+
+
+def is_locked(db: dict, branch: StrBranchName) -> bool:
+  """Returns whether `branch` is locked by someone else's PR, so it should not be rebased
+
+  A branch is locked when it has commits by other authors, is in sync with origin, and has an open
+  PR (drafts included).
+  """
+  branchd = db["local"][branch]
+  return (
+    branchd["pr_status"] == "open"
+    and bool(branchd["shas_ahead_default_other_authors"])
+    and get(db, ["remote", branch, "sha"]) == branchd["sha"]
+  )
 
 
 def local_branches_order(
@@ -873,8 +890,14 @@ def generate_update_commands(
   if branches_to_rebase:
     base_branches = refresh_bases(db["local"], db["default"])
     rebased_branches: set[StrBranchName] = set()
+    locked_branches = {branch for branch in db["local"] if is_locked(db, branch)}
 
     for branch in rebase_order(base_branches) + list(branches_to_rebase):
+      # Branches stacked on top of a locked branch move with it, not with their own base
+      if branch in locked_branches or db["local"][branch]["base"] in locked_branches:
+        locked_branches.add(branch)
+        continue
+
       if branch not in branches_to_rebase or branch in rebased_branches:
         continue
 
