@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 from datetime import UTC, datetime
+from textwrap import dedent
 from typing import TypeAlias
 from urllib.parse import urlencode
 
@@ -17,6 +18,7 @@ from rich import box
 from rich.console import Console
 from rich.live import Live
 from rich.table import Table
+from rich_argparse import ArgumentDefaultsRichHelpFormatter, RawDescriptionRichHelpFormatter
 
 from . import VERSION
 from .utils.git_utils import GitUtils
@@ -98,9 +100,54 @@ class GitHubApiError(Exception):
   pass
 
 
+class HelpFormatter(ArgumentDefaultsRichHelpFormatter, RawDescriptionRichHelpFormatter):
+  """Shows defaults and keeps the line breaks of the description and epilog."""
+
+
 def main() -> int:
   """Entry point for the CLI."""
-  parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser = argparse.ArgumentParser(
+    prog="branches",
+    formatter_class=HelpFormatter,
+    description=dedent("""\
+      Show your local git branches as a table with their status relative to the main
+      branch and their remotes, and suggest the commands to keep them up to date.
+
+      These are "update commands". You decide whether to run them: nothing is run
+      unless you answer yes at the prompt or pass -y. Read them before running them.
+
+      Operations rewrite the current branch and generate update commands for the
+      branches that depend on it:
+        amend   amend the last commit with your staged, unstaged and untracked changes
+        squash  squash the last commit into the one before it
+    """),
+    epilog=dedent("""\
+      Table columns:
+        Origin  SHA on the remote (links to the GitHub compare page)
+        -       how origin relates to local:
+                  >  origin is ahead of local
+                  <  origin is behind local
+                  Y  origin and local have diverged
+                  R  origin is a rebased copy of local (e.g. GitHub rebased a stacked PR)
+                  L  locked: someone else's open PR; the branch won't be rebased
+        Local   SHA of the local branch
+        Age     days since the last commit
+        <-      commits behind the base branch
+        ->      commits ahead of the base branch
+        Branch  branch name
+        Base    branch this one is based on
+        PR      status of the GitHub pull request, if any
+
+      PR information requires a GITHUB_TOKEN environment variable with repo access.
+
+      Examples:
+        branches                 show branches and suggest update commands
+        branches -s              show a short list
+        branches -C ~/code/repo  run on another repository
+        branches amend           amend the current commit and update dependent branches
+        branches squash -y       squash and run the update commands without asking
+    """),
+  )
   parser.add_argument(
     "--no-push", action="store_true", default=False, help="Do not suggest push commands"
   )
@@ -115,7 +162,8 @@ def main() -> int:
 
   parser.add_argument("-C", "--path", type=str, help="Path to the git repository")
 
-  parser.add_argument(
+  confirm_group = parser.add_mutually_exclusive_group()
+  confirm_group.add_argument(
     "-n",
     "--no",
     action="store_true",
@@ -123,7 +171,7 @@ def main() -> int:
     help="Automatically decline to update commands",
   )
 
-  parser.add_argument(
+  confirm_group.add_argument(
     "-y",
     "--yes",
     action="store_true",
