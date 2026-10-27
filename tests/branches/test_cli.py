@@ -3821,3 +3821,46 @@ def test_squash7():
     ],
     expected_returncode=1,
   )
+
+
+def test_rebase_current1():
+  """
+  Description:
+    Rebasing the current branch doesn't check it out first. Local main is ahead of origin/main, so
+    there's no pull to move away from the current branch (#53).
+
+  Setup:
+
+    C      <- next, origin/next
+   /
+  A---B    <- main
+  ^
+  origin/main
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_test(
+    " && ".join(
+      [
+        f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+        commit("A", now + sec * 1),
+        "git push -u origin main",
+        commit("B", now + sec * 2),
+        "git checkout -b next HEAD~1",
+        commit("C", now + sec * 3),
+        "git push -u origin next",
+      ]
+    ),
+    "branches",
+    [
+      r"                                          ",
+      r" Origin - Local  Age <- -> Branch Base PR ",
+      r" ──────────────────────────────────────── ",
+      r"  \w{5} < \w{5}    0  0 0  main           ",
+      r"  \w{5}   \w{5}    0  1 1  next           ",
+      r"                                          ",
+      r"git checkout next && git rebase main && git push -f",
+      r"",
+    ],
+  )
