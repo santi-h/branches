@@ -483,7 +483,7 @@ def table_row(
   row_dict["age"] = str((datetime.now(UTC) - git_utils.date_authored(local_sha)).days)
   row_dict["branch"] = branch
   if is_locked(db, branch):
-    row_dict["branch"] += " 🔒"
+    row_dict["branch"] += " [L]"
 
   if branch == git_utils.current_branch():
     row_dict["branch"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['branch']}[/{CURRENT_BRANCH_COLOR}]"
