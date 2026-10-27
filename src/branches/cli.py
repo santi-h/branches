@@ -434,6 +434,9 @@ def table_row(
     elif row_dict["relationship"] == "R":
       row_dict["relationship"] = "[cyan]" + row_dict["relationship"] + "[/cyan]"
 
+  if is_locked(db, branch):
+    row_dict["relationship"] = "[magenta]L[/magenta]"
+
   if sync_status in ["synced", "unsynced"] and branch != default:
     owner, repo = git_utils.owner_and_repo()
     url = f"https://github.com/{owner}/{repo}/tree/{branch}"
@@ -482,8 +485,6 @@ def table_row(
   row_dict["local"] = message_local_sha
   row_dict["age"] = str((datetime.now(UTC) - git_utils.date_authored(local_sha)).days)
   row_dict["branch"] = branch
-  if is_locked(db, branch):
-    row_dict["branch"] += " [L]"
 
   if branch == git_utils.current_branch():
     row_dict["branch"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['branch']}[/{CURRENT_BRANCH_COLOR}]"
