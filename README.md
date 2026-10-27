@@ -278,6 +278,8 @@ Run update command? [y/N]
 
 This is a trivial example. In practice it gets messier, there might be a lot more branches involved, and you might need to push the changes to origin.
 
+`branches squash` does the same, but squashes the last commit into the one before it instead of amending it with uncommitted changes. The message of the commit before it is kept. Branches that branched off either of those two commits are restacked on top of the squashed commit.
+
 ## Development: setup
 
 I recommend setting up:

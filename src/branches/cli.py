@@ -132,7 +132,7 @@ def main() -> int:
   )
 
   group = parser.add_mutually_exclusive_group()
-  group.add_argument("operation", nargs="?", choices=["amend"], help="Operation")
+  group.add_argument("operation", nargs="?", choices=["amend", "squash"], help="Operation")
   group.add_argument(
     "-s", "--short", action="store_true", default=False, help="Show a short list only"
   )
@@ -177,7 +177,7 @@ def branches(args: argparse.Namespace) -> int:
   for column_attr in COLUMNS.values():
     table.add_column(column_attr["column_name"], **(column_attr["column_props"] or {}))
 
-  if args.operation == "amend":
+  if args.operation in ["amend", "squash"]:
     args.short = True
 
   with Live(table, console=console, refresh_per_second=20):
@@ -187,26 +187,34 @@ def branches(args: argparse.Namespace) -> int:
 
   if args.operation is None:
     update_commands = generate_update_commands(db, git_utils, args.no_push)
-  elif args.operation == "amend":
+  elif args.operation in ["amend", "squash"]:
     if len(git_utils.current_branch() or "") <= 0:
-      print("Cannot run amend on a detached HEAD. Check out a branch first.\n")
+      print(f"Cannot run {args.operation} on a detached HEAD. Check out a branch first.\n")
       return 1
 
     if git_utils.main_branch() == git_utils.current_branch():
-      print("Cannot run amend on the main branch. Checkout a different branch.\n")
+      print(f"Cannot run {args.operation} on the main branch. Checkout a different branch.\n")
       return 1
 
-    changes_to_add = (
+    changes = (
       git_utils.staged_changes_filepaths()
       + git_utils.unstaged_changes_filepaths()
       + git_utils.untracked_filepaths()
     )
 
-    if len(changes_to_add) <= 0:
-      print("No changes to amend with.\n")
-      return 1
+    if args.operation == "amend":
+      if len(changes) <= 0:
+        print("No changes to amend with.\n")
+        return 1
 
-    err, update_commands = generate_amend_commands(db, git_utils, args.no_push)
+      err, update_commands = generate_amend_commands(db, git_utils, args.no_push)
+    else:
+      if len(changes) > 0:
+        print("Cannot run squash with uncommitted changes. Commit or stash them first.\n")
+        return 1
+
+      err, update_commands = generate_squash_commands(db, git_utils, args.no_push)
+
     if len(err or "") > 0:
       print(err)
       return 1
@@ -248,7 +256,7 @@ def create_db(
   git_utils: GitUtils,
   default: str | None = None,
   branches: list[str] | None = None,
-  ignore_behind: bool = False,
+  max_behind: int | None = None,
   short=False,
   remote: dict[StrBranchName, dict] | None = None,
 ):
@@ -286,7 +294,7 @@ def create_db(
       continue
 
     distance_default = git_utils.distance(default, branch)
-    if ignore_behind and distance_default[0]:
+    if max_behind is not None and distance_default[0] > max_behind:
       continue
 
     local[branch] = {
@@ -548,7 +556,7 @@ def local_branches_order(
     queue: list[StrBranchName] = []
     queue_saw: set[StrBranchName] = set()
     ret = [default]
-    if current != default:
+    if current and current != default:
       ret.append(current)
       queue.append(current)
       queue_saw.add(current)
@@ -744,29 +752,86 @@ def generate_amend_commands(
     1. If an error occurs, this will be the message string, otherwise None.
     2. A list of commands to run
   """
+  return generate_rewrite_commands(
+    db, git_utils, "amend", "git add -A && git commit --amend --no-edit", 0, no_push
+  )
+
+
+def generate_squash_commands(
+  db: dict, git_utils: GitUtils, no_push: bool = False
+) -> tuple[str | None, list[StrCommand] | None]:
+  """Returns a list of commands to run to squash the current commit into the one before it and
+  maintain tree structure. The message of the commit before it is kept.
+
+  Returns:
+    Tuple with two values:
+    1. If an error occurs, this will be the message string, otherwise None.
+    2. A list of commands to run
+  """
+  current = db["current"]
+  branchd = db["local"][current]
+  if branchd["has_merge_commits"]:
+    return ("Tool limitation: cannot squash or update branches with merge commits.", None)
+  if branchd["distance_base"][1] < 2:
+    return (
+      f"Cannot run squash: {current} needs at least two commits on top of {branchd['base']}.\n",
+      None,
+    )
+  # Branches that are behind the current one by a single commit branched off the commit that is
+  # squashed into, so they are rewritten as well
+  return generate_rewrite_commands(
+    db, git_utils, "squash", "git reset --soft HEAD~1 && git commit --amend --no-edit", 1, no_push
+  )
+
+
+def generate_rewrite_commands(
+  db: dict,
+  git_utils: GitUtils,
+  operation: str,
+  rewrite_command: StrCommand,
+  max_behind: int,
+  no_push: bool = False,
+) -> tuple[str | None, list[StrCommand] | None]:
+  """Returns a list of commands to run to rewrite the current branch with `rewrite_command` and
+  restack the branches that are at most `max_behind` commits behind it on top of it
+
+  Returns:
+    Tuple with two values:
+    1. If an error occurs, this will be the message string, otherwise None.
+    2. A list of commands to run
+  """
   if db["local"][db["current"]]["has_merge_commits"]:
-    return ("Tool limitation: cannot amend or update branches with merge commits.", None)
+    return (f"Tool limitation: cannot {operation} or update branches with merge commits.", None)
+  other_authors = {
+    branch: branchd["shas_ahead_default_other_authors"] for branch, branchd in db["local"].items()
+  }
   remote = copy.deepcopy(db["remote"])
   db = create_db(
     git_utils,
     default=db["current"],
     branches=db["local"].keys() - {db["default"]},
-    ignore_behind=True,
+    max_behind=max_behind,
     remote=db["remote"],
   )
-  for branchd in db["local"].values():
+  for branch, branchd in db["local"].items():
     branchd["distance_default"] = (
       branchd["distance_default"][0] + 1,
       branchd["distance_default"][1],
     )
+    # Other authors are relative to the main branch, so rewritten commits by others are not pushed
+    branchd["shas_ahead_default_other_authors"] = other_authors[branch]
     if branchd["has_merge_commits"]:
-      return ("Tool limitation: cannot amend or update branches with merge commits.", None)
+      return (f"Tool limitation: cannot {operation} or update branches with merge commits.", None)
   db["remote"] = remote
-  amend_commands = ["git add -A && git commit --amend --no-edit"]
-  other_authors = db["local"][db["current"]]["shas_ahead_default_other_authors"]
-  if get(db, ["remote", db["current"], "relationship"]) == "=" and not other_authors:
-    amend_commands[0] += " && git push -f"
-  return (None, amend_commands + generate_update_commands(db, git_utils, no_push, True))
+  rewrite_commands = [rewrite_command]
+  current = db["current"]
+  if (
+    not no_push
+    and get(db, ["remote", current, "relationship"]) == "="
+    and not other_authors[current]
+  ):
+    rewrite_commands[0] += " && git push -f"
+  return (None, rewrite_commands + generate_update_commands(db, git_utils, no_push, True))
 
 
 def generate_update_commands(
@@ -892,7 +957,7 @@ def generate_update_commands(
     rebased_branches: set[StrBranchName] = set()
     locked_branches = {branch for branch in db["local"] if is_locked(db, branch)}
 
-    for branch in rebase_order(base_branches) + list(branches_to_rebase):
+    for branch in rebase_order(base_branches) + sorted(branches_to_rebase):
       # Branches stacked on top of a locked branch move with it, not with their own base
       if branch in locked_branches or db["local"][branch]["base"] in locked_branches:
         locked_branches.add(branch)

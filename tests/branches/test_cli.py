@@ -3476,7 +3476,25 @@ def test_squash1():
   sec = timedelta(seconds=1)
 
   run_prep(squash_prep(now, sec))
-  run_test(None, "branches squash", [], expected_returncode=2)
+  run_test(
+    None,
+    "branches squash",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"git reset --soft HEAD~1 && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch4 && git rebase --onto branch1 branch4~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+  )
 
 
 def test_squash2():
@@ -3499,8 +3517,44 @@ def test_squash2():
       "git checkout branch1",
     ]
   )
-  run_test(None, "branches squash", [], expected_returncode=2)
-  run_test(None, "branches squash --no-push", [], expected_returncode=2)
+  run_test(
+    None,
+    "branches squash",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                 ",
+      r"  \w{5}   \w{5}    0  1 2  branch1              ",
+      r"  \w{5}   \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"git reset --soft HEAD~1 && git commit --amend --no-edit && git push -f && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && git push -f && \\",
+      r"git checkout branch4 && git rebase --onto branch1 branch4~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+  )
+  run_test(
+    None,
+    "branches squash --no-push",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                 ",
+      r"  \w{5}   \w{5}    0  1 2  branch1              ",
+      r"  \w{5}   \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"git reset --soft HEAD~1 && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch4 && git rebase --onto branch1 branch4~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+  )
 
 
 def test_squash3():
@@ -3515,16 +3569,46 @@ def test_squash3():
   sec = timedelta(seconds=1)
 
   run_prep(squash_prep(now, sec))
-  run_test(None, "branches squash -y", [], expected_returncode=2)
+  run_test(
+    None,
+    "branches squash -y",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"git reset --soft HEAD~1 && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch4 && git rebase --onto branch1 branch4~1 && \\",
+      r"git checkout branch1",
+      r"",
+      r"\[branch1 \w{7}\] B.txt",
+      r" Date: .*",
+      r" 2 files changed, 2 insertions\(\+\)",
+      r" create mode 100644 B.txt",
+      r" create mode 100644 C.txt",
+      r"Switched to branch 'branch2'",
+      r"Rebasing \(1/1\)",
+      r"Successfully rebased and updated refs/heads/branch2.",
+      r"Switched to branch 'branch4'",
+      r"Rebasing \(1/1\)",
+      r"Successfully rebased and updated refs/heads/branch4.",
+      r"Switched to branch 'branch1'",
+    ],
+  )
 
-  assert run_command("git log -1 --format=%s branch1").stdout == "C.txt\n"
-  assert run_command("git rev-list --count main~1..branch1").stdout == "2\n"
+  assert run_command("git log -1 --format=%s branch1").stdout == "B.txt\n"
+  assert run_command("git rev-list --count main~1..branch1").stdout == "1\n"
   assert run_command("git ls-tree --name-only branch1").stdout == "A.txt\nB.txt\nC.txt\n"
   assert (
     run_command("git rev-parse branch2~1").stdout == run_command("git rev-parse branch1").stdout
   )
   assert (
-    run_command("git rev-parse branch4~1").stdout == run_command("git rev-parse branch1~1").stdout
+    run_command("git rev-parse branch4~1").stdout == run_command("git rev-parse branch1").stdout
   )
   assert run_command("git status --porcelain").stdout == ""
 
@@ -3549,7 +3633,25 @@ def test_squash4():
       "git checkout branch1",
     ]
   )
-  run_test(None, "branches squash", [], expected_returncode=2)
+  run_test(
+    None,
+    "branches squash",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                 ",
+      r" !\w{5}   \w{5}!   0  1 2  branch1              ",
+      r" !\w{5}   \w{5}!   0  1 3  branch2 branch1      ",
+      r"          \w{5}!   0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"git reset --soft HEAD~1 && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch4 && git rebase --onto branch1 branch4~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+  )
 
 
 def test_squash5():
@@ -3565,10 +3667,66 @@ def test_squash5():
   sec = timedelta(seconds=1)
 
   run_prep(squash_prep(now, sec))
-  run_test("git checkout main", "branches squash", [], expected_returncode=2)
-  run_test("git checkout --detach branch1", "branches squash", [], expected_returncode=2)
-  run_test("git checkout branch3", "branches squash", [], expected_returncode=2)
-  run_test("git checkout branch2", "branches squash", [], expected_returncode=2)
+  run_test(
+    "git checkout main",
+    "branches squash",
+    [
+      r"                                          ",
+      r" Origin - Local  Age <- -> Branch Base PR ",
+      r" ──────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main           ",
+      r"                                          ",
+      r"Cannot run squash on the main branch. Checkout a different branch.",
+      r"",
+    ],
+    expected_returncode=1,
+  )
+  run_test(
+    "git checkout --detach branch1",
+    "branches squash",
+    [
+      r"                                          ",
+      r" Origin - Local  Age <- -> Branch Base PR ",
+      r" ──────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main           ",
+      r"                                          ",
+      r"Cannot run squash on a detached HEAD. Check out a branch first.",
+      r"",
+    ],
+    expected_returncode=1,
+  )
+  run_test(
+    "git checkout branch3",
+    "branches squash",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main            ",
+      r"          \w{5}    0  1 1  branch3         ",
+      r"                                           ",
+      r"Cannot run squash: branch3 needs at least two commits on top of main.",
+      r"",
+    ],
+    expected_returncode=1,
+  )
+  run_test(
+    "git checkout branch2",
+    "branches squash",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"Cannot run squash: branch2 needs at least two commits on top of branch1.",
+      r"",
+    ],
+    expected_returncode=1,
+  )
 
 
 def test_squash6():
@@ -3585,22 +3743,55 @@ def test_squash6():
   run_test(
     "echo 'changed' >> C.txt && git add C.txt",
     "branches squash",
-    [],
-    expected_returncode=2,
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"Cannot run squash with uncommitted changes. Commit or stash them first.",
+      r"",
+    ],
+    expected_returncode=1,
     cleanup_command="git reset HEAD && git checkout .",
   )
   run_test(
     "echo 'changed' >> C.txt",
     "branches squash",
-    [],
-    expected_returncode=2,
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"Cannot run squash with uncommitted changes. Commit or stash them first.",
+      r"",
+    ],
+    expected_returncode=1,
     cleanup_command="git checkout .",
   )
   run_test(
     "echo 'new' > new.txt",
     "branches squash",
-    [],
-    expected_returncode=2,
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"Cannot run squash with uncommitted changes. Commit or stash them first.",
+      r"",
+    ],
+    expected_returncode=1,
     cleanup_command="git clean -fd",
   )
 
@@ -3616,4 +3807,17 @@ def test_squash7():
   sec = timedelta(seconds=1)
 
   run_prep(squash_prep(now, sec) + ["git merge --no-edit branch3", commit("H", now + sec * 8)])
-  run_test(None, "branches squash", [], expected_returncode=2)
+  run_test(
+    None,
+    "branches squash",
+    [
+      r"                                            ",
+      r" Origin - Local  Age <- ->  Branch  Base PR ",
+      r" ────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0   main            ",
+      r"          \w{5}    0  1 5 M branch1         ",
+      r"                                            ",
+      r"Tool limitation: cannot squash or update branches with merge commits.",
+    ],
+    expected_returncode=1,
+  )
