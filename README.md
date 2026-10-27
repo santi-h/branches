@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/santi-h/branches/actions/workflows/ci.yml/badge.svg)](https://github.com/santi-h/branches/actions/workflows/ci.yml?query=branch%3Amain)
 
-![screenshot](/docs/branches_screenshot.png)
+![screenshot](/docs/branches.gif)
 
 This tool is useful if you prefer rebasing over merging and use GitHub.
 
@@ -39,6 +39,8 @@ branches
 branches --help
 ```
 
+`branches --help` describes the operations (`amend`, `squash`), the table columns and the symbols in them, and shows examples. `-n` (decline) and `-y` (run) are mutually exclusive ways to answer the update commands prompt without being asked.
+
 ## Assumptions and requirements
 
 - This script is mostly developed and tested on arm64 MacOS. Executables for arm64 Linux and amd64 Linux are created and should work but not as manually tested. The CI tests do run on Linux though.
@@ -53,7 +55,7 @@ For each branch, `branches` outputs information that is usaully handy to have:
 
 - Whether this branch is in `origin` or not
 - If the branch is in `origin`, is it in sync or something needs to be pulled or pushed?
-- If the branch is in `origin`, what is the `relationship` between the two? is remote ahead (`>`), behind (`<`), deviated (`Y`), or a rebased copy of local with the same commits on a newer base (`R`, e.g. after GitHub rebases a stacked PR)?
+- If the branch is in `origin`, what is the `relationship` between the two? is remote ahead (`>`), behind (`<`), deviated (`Y`), a rebased copy of local with the same commits on a newer base (`R`, e.g. after GitHub rebases a stacked PR), or locked (`L`, someone else's open PR is on the branch and it's in sync with origin, so it won't be rebased)?
 - If the branch is in `origin`, a handy link to the changes in github
 - Whether there's commits authored by someone else other than the current git user
 - Branch's last commit authored age in days
