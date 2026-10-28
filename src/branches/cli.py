@@ -78,6 +78,12 @@ COLUMNS = {
     "column_name": "->",
     "column_props": {"justify": "left"},
   },
+  # Properties columns: blank header, hidden when no row has the property
+  "locked": {
+    "column_name": "",
+    "column_props": None,
+    "hide_if_empty": True,
+  },
   "branch": {
     "column_name": "Branch",
     "column_props": None,
@@ -128,11 +134,13 @@ def main() -> int:
                   <  origin is behind local
                   Y  origin and local have diverged
                   R  origin is a rebased copy of local (e.g. GitHub rebased a stacked PR)
-                  L  locked: someone else's open PR; the branch won't be rebased
         Local   SHA of the local branch
         Age     days since the last commit
         <-      commits behind the base branch
         ->      commits ahead of the base branch
+                branch properties, one blank-headed column each, shown only when
+                some branch has it:
+                  L  locked: someone else's open PR; the branch won't be rebased
         Branch  branch name
         Base    branch this one is based on
         PR      status of the GitHub pull request, if any
@@ -295,6 +303,12 @@ def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> 
     row_dict = table_row(db, branch, git_utils, show_warnings)
     show_warnings = False
     table.add_row(*[row_dict.get(column_key) for column_key in COLUMNS])
+
+  table.columns = [
+    column
+    for column, column_attr in zip(table.columns, COLUMNS.values(), strict=True)
+    if not column_attr.get("hide_if_empty") or any(column.cells)
+  ]
 
   return db
 
@@ -484,13 +498,11 @@ def table_row(
       message_remote_sha = f"[bold]{remote_sha_short}[/bold]"
 
     row_dict["relationship"] = db["remote"][branch]["relationship"]
-    if row_dict["relationship"] == "Y":
+    if row_dict["relationship"] in ["Y", "R"]:
       row_dict["relationship"] = "[yellow]" + row_dict["relationship"] + "[/yellow]"
-    elif row_dict["relationship"] == "R":
-      row_dict["relationship"] = "[cyan]" + row_dict["relationship"] + "[/cyan]"
 
   if is_locked(db, branch):
-    row_dict["relationship"] = "[magenta]L[/magenta]"
+    row_dict["locked"] = "[magenta]L[/magenta]"
 
   if sync_status in ["synced", "unsynced"] and branch != default:
     owner, repo = git_utils.owner_and_repo()
