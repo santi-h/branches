@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 # This script assumes:
 # - it's being run on arm64 MacOS
-# - pip-sync requirements-dev.txt was run
+# - uv is installed
 set -euo pipefail
 
 ROOT_DIR="$(realpath "$(dirname "$0")"/..)"
 PYTHON_VERSION=$(cat "$ROOT_DIR/.python-version")
-BRANCHES_VERSION=$(PYTHONPATH="$ROOT_DIR/src" python -c "from branches import VERSION; print(VERSION)")
+BRANCHES_VERSION=$(PYTHONPATH="$ROOT_DIR/src" uv run --project "$ROOT_DIR" python -c "from branches import VERSION; print(VERSION)")
 
 echo "        ROOT_DIR=$ROOT_DIR"
 echo "  PYTHON_VERSION=$PYTHON_VERSION"
@@ -14,7 +14,7 @@ echo "BRANCHES_VERSION=$BRANCHES_VERSION"
 
 rm -rf "$ROOT_DIR/build" "$ROOT_DIR/dist"
 
-pyinstaller --onedir \
+uv run --project "$ROOT_DIR" pyinstaller --onedir \
             --name branches \
             --workpath "$ROOT_DIR/build/macos/arm64" \
             --distpath "$ROOT_DIR/dist/macos/arm64" \
@@ -31,10 +31,10 @@ docker run --rm -it \
     apt-get install -y --no-install-recommends binutils
     rm -rf /var/lib/apt/lists/*
 
-    pip install -U pip
-    pip install -U pip-tools
-    pip-sync requirements-dev.txt
-    pyinstaller --onedir \
+    pip install -U uv
+    export UV_PROJECT_ENVIRONMENT=/opt/venv UV_PYTHON=python
+    uv sync --frozen
+    uv run --frozen pyinstaller --onedir \
                 --name branches \
                 --workpath build/linux/arm64 \
                 --distpath dist/linux/arm64 \
@@ -52,10 +52,10 @@ docker run --rm -it \
     apt-get install -y --no-install-recommends binutils
     rm -rf /var/lib/apt/lists/*
 
-    pip install -U pip
-    pip install -U pip-tools
-    pip-sync requirements-dev.txt
-    pyinstaller --onedir \
+    pip install -U uv
+    export UV_PROJECT_ENVIRONMENT=/opt/venv UV_PYTHON=python
+    uv sync --frozen
+    uv run --frozen pyinstaller --onedir \
                 --name branches \
                 --workpath build/linux/amd64 \
                 --distpath dist/linux/amd64 \

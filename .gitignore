@@ -8,3 +8,5 @@ __pycache__/
 /tests/branches/test_cli_result.txt
 /tests/branches/test_cli_result.py
 /tests/branches/test_cli_worktree/
+/.venv/
+/src/*.egg-info/

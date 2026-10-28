@@ -284,60 +284,33 @@ This is a trivial example. In practice it gets messier, there might be a lot mor
 
 ## Development: setup
 
-I recommend setting up:
-
-- [`direnv`](https://direnv.net)
-- [`pyenv`](https://formulae.brew.sh/formula/pyenv) + [`pyenv-virtualenv`](https://formulae.brew.sh/formula/pyenv-virtualenv)
-
-Steps:
-
-- Create virtualenv:
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then:
 
 ```shell
-pyenv virtualenv `cat .python-version` branches
+uv sync
 ```
 
-- Set direnv so every time you `cd` into this directory it uses the virtualenv created above:
-
-```shell
-echo 'export PYENV_VERSION=branches' > .envrc
-```
-
-(allow if prompted)
-
-- Install `pip-tools` with `pip install -U pip pip-tools`. See [`pip-tools` docs](https://pypi.org/project/pip-tools).
-
-- Install `pypi` dependencies:
-
-```shell
-pip-sync requirements-dev.txt
-```
+This installs the Python version in `.python-version` (if needed) and all dependencies into `.venv`.
 
 ## Development: dependencies
+
+To add/remove dependencies:
+
+```shell
+uv add <package>          # or: uv add --dev <package>
+uv remove <package>
+```
 
 To upgrade all dependencies:
 
 ```shell
-pip-compile --output-file=requirements.txt requirements.in --upgrade &&
-pip-compile --output-file=requirements-dev.txt requirements-dev.in --upgrade
-```
-
-When adding/removing dependencies to the `.in` files:
-
-```shell
-pip-compile --output-file=requirements.txt requirements.in &&
-pip-compile --output-file=requirements-dev.txt requirements-dev.in &&
-pip-sync requirements-dev.txt
+uv lock --upgrade && uv sync
 ```
 
 ## Development: clean slate
 
-Assuming `.envrc` stays
-
 ```shell
-pyenv virtualenv-delete -f branches &&
-pyenv virtualenv `cat .python-version` branches &&
-pip install -U pip pip-tools
+scripts/prepare.sh
 ```
 
 ## Development: upgrade python and dependencies
@@ -353,19 +326,19 @@ scripts/upgrade.sh 3.14.3
 To run all tests:
 
 ```shell
-pytest
+uv run pytest
 ```
 
 To run a specific file:
 
 ```shell
-pytest -k test_branches.py
+uv run pytest -k test_branches.py
 ```
 
 To run a specific test:
 
 ```shell
-pytest -k test_generate_update_commands
+uv run pytest -k test_generate_update_commands
 ```
 
 ## Distribution Step 1: Create executables
@@ -381,7 +354,7 @@ scripts/build.sh
 Make sure the `VERSION` in `src/branches/__init__.py` is updated, and then run:
 
 ```shell
-VERSION=$(PYTHONPATH=src python -c "from branches import VERSION; print(VERSION)") && \
+VERSION=$(PYTHONPATH=src uv run python -c "from branches import VERSION; print(VERSION)") && \
 git tag v$VERSION && git push origin v$VERSION && \
 open 'https://github.com/santi-h/branches/releases/new' && \
 open ./dist/

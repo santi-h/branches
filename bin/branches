@@ -1,6 +1,5 @@
 #!/usr/bin/env zsh
 
 ROOT_DIR="$(realpath "$(dirname "$0")"/..)"
-VIRTUALENV="$(basename "$(basename "$ROOT_DIR")")"
 
-PYTHONPATH="$ROOT_DIR/src" $PYENV_ROOT/versions/$VIRTUALENV/bin/python -m branches "$@"
+PYTHONPATH="$ROOT_DIR/src" "$ROOT_DIR/.venv/bin/python" -m branches "$@"

@@ -1,7 +1,0 @@
--r requirements.in
--c requirements.txt
-
-pyinstaller
-pytest
-pytest-httpserver
-ruff
