@@ -84,6 +84,11 @@ COLUMNS = {
     "column_props": None,
     "hide_if_empty": True,
   },
+  "conflicts": {
+    "column_name": "",
+    "column_props": None,
+    "hide_if_empty": True,
+  },
   "branch": {
     "column_name": "Branch",
     "column_props": None,
@@ -141,6 +146,7 @@ def main() -> int:
                 branch properties, one blank-headed column each, shown only when
                 some branch has it:
                   L  locked: someone else's open PR; the branch won't be rebased
+                  C  conflicts: rebasing the branch onto its base would conflict
         Branch  branch name
         Base    branch this one is based on
         PR      status of the GitHub pull request, if any
@@ -504,6 +510,11 @@ def table_row(
   if is_locked(db, branch):
     row_dict["locked"] = "[magenta]L[/magenta]"
 
+  if branch != default:
+    future_tree(db, branch, git_utils)
+    if db["local"][branch]["conflicts"]:
+      row_dict["conflicts"] = "[red]C[/red]"
+
   if sync_status in ["synced", "unsynced"] and branch != default:
     owner, repo = git_utils.owner_and_repo()
     url = f"https://github.com/{owner}/{repo}/tree/{branch}"
@@ -576,6 +587,37 @@ def is_locked(db: dict, branch: StrBranchName) -> bool:
     and bool(branchd["shas_ahead_default_other_authors"])
     and get(db, ["remote", branch, "sha"]) == branchd["sha"]
   )
+
+
+def future_tree(db: dict, branch: StrBranchName, git_utils: GitUtils) -> StrSha:
+  """Returns the tree `branch` would have after rebasing it onto its base, which is pulled first
+
+  For non-default branches, it also sets "conflicts": whether that rebase would conflict. A branch
+  with conflicts keeps its own tree, so branches stacked on top of it are checked against it. The
+  rebase is simulated as a single merge, so it can miss conflicts that only happen when replaying an
+  intermediate commit.
+  """
+  branchd = db["local"][branch]
+  if "future_tree" in branchd:
+    return branchd["future_tree"]
+
+  sha = branchd["sha"]
+  if branch == db["default"]:
+    remote_commit = git_utils.local_commit_from_sha(get(db, ["remote", branch, "sha"]) or sha)
+    if remote_commit and git_utils.is_ancestor(git_utils.local_commit_from_sha(sha), remote_commit):
+      sha = remote_commit.hexsha
+
+    branchd["future_tree"] = sha
+    return sha
+
+  tree = None
+  merge_base = git_utils.merge_base(db["local"][branchd["base"]]["sha"], sha)
+  if merge_base:
+    tree = git_utils.merge_tree(merge_base, future_tree(db, branchd["base"], git_utils), sha)
+
+  branchd["conflicts"] = merge_base is not None and tree is None
+  branchd["future_tree"] = tree or sha
+  return branchd["future_tree"]
 
 
 def local_branches_order(

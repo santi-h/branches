@@ -287,6 +287,40 @@ class GitUtils:
 
     return ret
 
+  def merge_tree(self, merge_base: str, ours: str, theirs: str) -> str | None:
+    """Merges `theirs` into `ours` without touching the working tree or the index
+
+    Each argument can be a commit or a tree.
+
+    Returns:
+      The sha of the resulting tree
+      None if the merge has conflicts
+    """
+    result = subprocess.run(
+      [
+        "git",
+        "-C",
+        self._repo_path,
+        "merge-tree",
+        "--write-tree",
+        "--no-messages",
+        f"--merge-base={merge_base}",
+        ours,
+        theirs,
+      ],
+      capture_output=True,
+      text=True,
+      check=False,
+    )
+    if result.returncode == 1:
+      return None
+    if result.returncode != 0:
+      raise subprocess.CalledProcessError(
+        result.returncode, result.args, result.stdout, result.stderr
+      )
+
+    return result.stdout.split()[0]
+
   def current_user_email(self) -> str | None:
     try:
       return self._cmd.execute(["git", "-C", self._repo_path, "config", "user.email"]).strip()
