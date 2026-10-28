@@ -6,20 +6,46 @@ set -euo pipefail
 
 ROOT_DIR="$(realpath "$(dirname "$0")"/..)"
 PYTHON_VERSION=$(cat "$ROOT_DIR/.python-version")
-BRANCHES_VERSION=$(PYTHONPATH="$ROOT_DIR/src" uv run --project "$ROOT_DIR" python -c "from branches import VERSION; print(VERSION)")
+
+# The macOS executable bundles the interpreter and the shared libraries it links against, so they
+# determine the oldest macOS it runs on. Pyenv/Homebrew pythons link against Homebrew libraries
+# built for the current macOS, so only use uv's python-build-standalone interpreters (built for
+# old macOS versions), in a throwaway venv so an existing .venv can't leak in a different python.
+export UV_PYTHON_PREFERENCE=only-managed
+export UV_PROJECT_ENVIRONMENT="$ROOT_DIR/build/venv"
+MAX_MACOS_MINOS=${MAX_MACOS_MINOS:-14.0}
+
+rm -rf "$ROOT_DIR/build" "$ROOT_DIR/dist"
+
+BRANCHES_VERSION=$(PYTHONPATH="$ROOT_DIR/src" uv run --frozen --project "$ROOT_DIR" python -c "from branches import VERSION; print(VERSION)")
 
 echo "        ROOT_DIR=$ROOT_DIR"
 echo "  PYTHON_VERSION=$PYTHON_VERSION"
 echo "BRANCHES_VERSION=$BRANCHES_VERSION"
+echo " MAX_MACOS_MINOS=$MAX_MACOS_MINOS"
 
-rm -rf "$ROOT_DIR/build" "$ROOT_DIR/dist"
-
-uv run --project "$ROOT_DIR" pyinstaller --onedir \
+uv run --frozen --project "$ROOT_DIR" pyinstaller --onedir \
             --name branches \
             --workpath "$ROOT_DIR/build/macos/arm64" \
             --distpath "$ROOT_DIR/dist/macos/arm64" \
             --paths "$ROOT_DIR/src" \
             "$ROOT_DIR/src/branches/__main__.py"
+
+# Fail if anything in the macOS bundle requires a newer macOS than MAX_MACOS_MINOS
+TOO_NEW=$(
+  find "$ROOT_DIR/dist/macos/arm64/branches" -type f \( -name '*.dylib' -o -name '*.so' -o -name branches \) |
+  while read -r f; do
+    minos=$(otool -l "$f" | awk '/minos/{print $2; exit}')
+    if [[ -n $minos && $(printf '%s\n%s\n' "$minos" "$MAX_MACOS_MINOS" | sort -V | tail -1) != "$MAX_MACOS_MINOS" ]]; then
+      echo "$minos $f"
+    fi
+  done
+)
+if [[ -n $TOO_NEW ]]; then
+  echo "ERROR: macOS bundle requires macOS newer than $MAX_MACOS_MINOS:" >&2
+  echo "$TOO_NEW" >&2
+  exit 1
+fi
 
 docker run --rm -it \
   --platform=linux/arm64 \
