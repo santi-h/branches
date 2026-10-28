@@ -8,7 +8,6 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from textwrap import dedent
-from typing import TypeAlias
 from urllib.parse import urlencode
 
 import requests
@@ -23,14 +22,14 @@ from rich_argparse import ArgumentDefaultsRichHelpFormatter, RawDescriptionRichH
 from . import VERSION
 from .utils.git_utils import GitUtils
 
-# Using some TypeAliases just for readability / documentation
-StrBranchName: TypeAlias = str
-StrSha: TypeAlias = str
-StrShaShort: TypeAlias = str
-StrShaRef: TypeAlias = str  # Examples: "branch1", "branch1~3", "branch2~1".
-StrCommand: TypeAlias = str
-DictUpdateParams: TypeAlias = dict
-DictTableRow: TypeAlias = dict
+# Using some type aliases just for readability / documentation
+type StrBranchName = str
+type StrSha = str
+type StrShaShort = str
+type StrShaRef = str  # Examples: "branch1", "branch1~3", "branch2~1".
+type StrCommand = str
+type DictUpdateParams = dict
+type DictTableRow = dict
 
 console = Console(highlight=False)
 
