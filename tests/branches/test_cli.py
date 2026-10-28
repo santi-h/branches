@@ -4422,7 +4422,7 @@ def test_conflicts1():
   """
   Description:
     branch1 changes the same file as main does since branch1 branched off, so rebasing it would
-    conflict. branch2 doesn't, so it wouldn't.
+    conflict, so it's not rebased. branch2 doesn't, so it is.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -4455,7 +4455,6 @@ def test_conflicts1():
       r"          \w{5}    0  1 1    branch2         ",
       r"          \w{5}    0  1 1  C branch1         ",
       r"                                             ",
-      r"git checkout branch1 && git rebase main && \\",
       r"git checkout branch2 && git rebase main && \\",
       r"git checkout main",
       r"",
@@ -4467,7 +4466,7 @@ def test_conflicts2():
   """
   Description:
     origin/main changes the same file as branch1 does, and local main is behind. Conflicts are
-    checked against origin/main, since main gets pulled before rebasing.
+    checked against origin/main, since main gets pulled before rebasing. branch1 is not rebased.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -4497,7 +4496,7 @@ def test_conflicts2():
       r"          \w{5}    0  0 1  C branch1         ",
       r"                                             ",
       r"git checkout main && git pull && \\",
-      r"git checkout branch1 && git rebase main",
+      r"git checkout branch1",
       r"",
     ],
   )
@@ -4508,7 +4507,8 @@ def test_conflicts3():
   Description:
     Stacked branches. branch2 is stacked on branch1, which rebases cleanly onto main. branch2
     conflicts with main. branch4 is stacked on branch3, which conflicts with main, so branch4 is
-    checked against branch3 as is, and doesn't conflict.
+    checked against branch3 as is, and doesn't conflict. Only branch1 is rebased: branch2 and
+    branch3 have conflicts, and branch4 stays stacked on branch3.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -4550,9 +4550,6 @@ def test_conflicts3():
       r"          \w{5}    0  1 1    branch1            ",
       r"                                                ",
       r"git checkout branch1 && git rebase main && \\",
-      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
-      r"git checkout branch3 && git rebase main && \\",
-      r"git checkout branch4 && git rebase --onto branch3 branch4~1 && \\",
       r"git checkout main",
       r"",
     ],
