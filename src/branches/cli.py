@@ -146,7 +146,7 @@ def main() -> int:
                 branch properties, one blank-headed column each, shown only when
                 some branch has it:
                   L  locked: someone else's open PR; the branch won't be rebased
-                  C  conflicts: rebasing the branch onto its base would conflict
+                  C  conflicts: rebasing onto its base would conflict; it won't be rebased
         Branch  branch name
         Base    branch this one is based on
         PR      status of the GitHub pull request, if any
@@ -1056,7 +1056,12 @@ def generate_update_commands(
   if branches_to_rebase:
     base_branches = refresh_bases(db["local"], db["default"])
     rebased_branches: set[StrBranchName] = set()
-    locked_branches = {branch for branch in db["local"] if is_locked(db, branch)}
+    # Branches whose rebase would conflict are left alone, like locked ones
+    locked_branches = {
+      branch
+      for branch, branchd in db["local"].items()
+      if is_locked(db, branch) or branchd.get("conflicts")
+    }
 
     for branch in rebase_order(base_branches) + sorted(branches_to_rebase):
       # Branches stacked on top of a locked branch move with it, not with their own base
