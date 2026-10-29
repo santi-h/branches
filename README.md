@@ -56,7 +56,7 @@ For each branch, `branches` outputs information that is usaully handy to have:
 - Whether this branch is in `origin` or not
 - If the branch is in `origin`, is it in sync or something needs to be pulled or pushed?
 - If the branch is in `origin`, what is the `relationship` between the two? is remote ahead (`>`), behind (`<`), deviated (`Y`), or a rebased copy of local with the same commits on a newer base (`R`, e.g. after GitHub rebases a stacked PR)?
-- Branch properties, each in its own column shown only when some branch has it: locked (`L`, someone else's open PR is on the branch and it's in sync with origin, so it won't be rebased), conflicts (`C`, rebasing the branch onto its base would conflict, so it won't be rebased)
+- Branch properties, each in its own column shown only when some branch has it: locked (`L`, someone else's open PR is on the branch and it's in sync with origin), conflicts (`C`, rebasing the branch onto its base would conflict). If any branch in a stack has either, the whole stack is left alone
 - If the branch is in `origin`, a handy link to the changes in github
 - Whether there's commits authored by someone else other than the current git user
 - Branch's last commit authored age in days

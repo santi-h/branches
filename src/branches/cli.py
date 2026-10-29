@@ -145,8 +145,8 @@ def main() -> int:
         ->      commits ahead of the base branch
                 branch properties, one blank-headed column each, shown only when
                 some branch has it:
-                  L  locked: someone else's open PR; the branch won't be rebased
-                  C  conflicts: rebasing onto its base would conflict; it won't be rebased
+                  L  locked: someone else's open PR
+                  C  conflicts: rebasing onto its base would conflict
         Branch  branch name
         Base    branch this one is based on
         PR      status of the GitHub pull request, if any
@@ -587,6 +587,30 @@ def is_locked(db: dict, branch: StrBranchName) -> bool:
     and bool(branchd["shas_ahead_default_other_authors"])
     and get(db, ["remote", branch, "sha"]) == branchd["sha"]
   )
+
+
+def frozen_branches(db: dict) -> set[StrBranchName]:
+  """Returns the branches in stacks that won't be rebased because a branch in them is locked or has
+  conflicts
+
+  A stack is the tree of branches connected through their base, from the branch based on the default
+  branch down to all its descendants. Rebasing any part of it would leave the locked or conflicted
+  branch on the old copies of the commits it shares with the rest of the stack.
+  """
+  default = db["default"]
+
+  def stack_root(branch: StrBranchName) -> StrBranchName:
+    while (base := db["local"][branch]["base"]) != default and base in db["local"]:
+      branch = base
+    return branch
+
+  branches = db["local"].keys() - {default}
+  blocked_roots = {
+    stack_root(branch)
+    for branch in branches
+    if is_locked(db, branch) or db["local"][branch].get("conflicts")
+  }
+  return {branch for branch in branches if stack_root(branch) in blocked_roots}
 
 
 def future_tree(db: dict, branch: StrBranchName, git_utils: GitUtils) -> StrSha:
@@ -1056,20 +1080,10 @@ def generate_update_commands(
   if branches_to_rebase:
     base_branches = refresh_bases(db["local"], db["default"])
     rebased_branches: set[StrBranchName] = set()
-    # Branches whose rebase would conflict are left alone, like locked ones
-    locked_branches = {
-      branch
-      for branch, branchd in db["local"].items()
-      if is_locked(db, branch) or branchd.get("conflicts")
-    }
+    frozen = frozen_branches(db)
 
     for branch in rebase_order(base_branches) + sorted(branches_to_rebase):
-      # Branches stacked on top of a locked branch move with it, not with their own base
-      if branch in locked_branches or db["local"][branch]["base"] in locked_branches:
-        locked_branches.add(branch)
-        continue
-
-      if branch not in branches_to_rebase or branch in rebased_branches:
+      if branch in frozen or branch not in branches_to_rebase or branch in rebased_branches:
         continue
 
       base_branch = db["local"][branch]["base"]
