@@ -130,8 +130,11 @@ def run_test(
     subprocess.run(f"cd '{GIT_TMP_DIRPATH_LOCAL}' && {cleanup_command}", shell=True, check=False)
 
 
-def commit(name: str, date: datetime | None = None, author: str | None = None) -> str:
-  ret = f"echo '{name}.txt' > {name}.txt && git add -A && "
+def commit(
+  name: str, date: datetime | None = None, author: str | None = None, file: str | None = None
+) -> str:
+  """`file` is the file to write to, without extension. Defaults to `name`."""
+  ret = f"echo '{name}.txt' > {file or name}.txt && git add -A && "
 
   if date:
     # Committer date too, so the order in `git_graph` doesn't depend on timing
@@ -4410,6 +4413,147 @@ def test_rebase_current1():
       r"  \w{5}   \w{5}    0  1 1  next           ",
       r"                                          ",
       r"git rebase main && git push -f",
+      r"",
+    ],
+  )
+
+
+def test_conflicts1():
+  """
+  Description:
+    branch1 changes the same file as main does since branch1 branched off, so rebasing it would
+    conflict. branch2 doesn't, so it wouldn't.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1, file="F"),
+    "git checkout -b branch1",
+    commit("B", now + sec * 2, file="F"),
+    "git checkout -b branch2 main",
+    commit("C", now + sec * 3),
+    "git checkout main",
+    commit("D", now + sec * 4, file="F"),
+  )
+  run_test(
+    r"""
+    *         D (HEAD -> main)
+    | *       C (branch2)
+    |/
+    | *       B (branch1)
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                             ",
+      r" Origin - Local  Age <- ->   Branch  Base PR ",
+      r" ─────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0    main            ",
+      r"          \w{5}    0  1 1    branch2         ",
+      r"          \w{5}    0  1 1  C branch1         ",
+      r"                                             ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
+
+
+def test_conflicts2():
+  """
+  Description:
+    origin/main changes the same file as branch1 does, and local main is behind. Conflicts are
+    checked against origin/main, since main gets pulled before rebasing.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1, file="F"),
+    commit("B", now + sec * 2, file="F"),
+    "git push -u origin main",
+    "git reset --hard HEAD~1",
+    "git checkout -b branch1",
+    commit("C", now + sec * 3, file="F"),
+  )
+  run_test(
+    r"""
+    *         C (HEAD -> branch1)
+    | *       B (origin/main)
+    |/
+    *         A (main)
+    """,
+    "branches",
+    [
+      r"                                             ",
+      r" Origin - Local  Age <- ->   Branch  Base PR ",
+      r" ─────────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0    main            ",
+      r"          \w{5}    0  0 1  C branch1         ",
+      r"                                             ",
+      r"git checkout main && git pull && \\",
+      r"git checkout branch1 && git rebase main",
+      r"",
+    ],
+  )
+
+
+def test_conflicts3():
+  """
+  Description:
+    Stacked branches. branch2 is stacked on branch1, which rebases cleanly onto main. branch2
+    conflicts with main. branch4 is stacked on branch3, which conflicts with main, so branch4 is
+    checked against branch3 as is, and doesn't conflict.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1, file="F"),
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git checkout -b branch2",
+    commit("C", now + sec * 3, file="F"),
+    "git checkout -b branch3 main",
+    commit("D", now + sec * 4, file="F"),
+    "git checkout -b branch4",
+    commit("E", now + sec * 5),
+    "git checkout main",
+    commit("G", now + sec * 6, file="F"),
+  )
+  run_test(
+    r"""
+    *         G (HEAD -> main)
+    | *       E (branch4)
+    | *       D (branch3)
+    |/
+    | *       C (branch2)
+    | *       B (branch1)
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- ->   Branch  Base    PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0    main               ",
+      r"          \w{5}    0  1 2    branch4 branch3    ",
+      r"          \w{5}    0  1 1  C branch3            ",
+      r"          \w{5}    0  1 2  C branch2 branch1    ",
+      r"          \w{5}    0  1 1    branch1            ",
+      r"                                                ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch3 && git rebase main && \\",
+      r"git checkout branch4 && git rebase --onto branch3 branch4~1 && \\",
+      r"git checkout main",
       r"",
     ],
   )
