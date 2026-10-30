@@ -1,10 +1,12 @@
 # Example usage:
 # python branches.py
 import argparse
+import base64
 import copy
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -115,6 +117,8 @@ def main() -> int:
 
       These are "update commands". You decide whether to run them: nothing is run
       unless you answer yes at the prompt or pass -y. Read them before running them.
+      Answer copy (c) at the prompt to copy them to the clipboard instead, or pass -c
+      to copy them (and -y to also run them).
 
       Operations rewrite the current branch and generate update commands for the
       branches that depend on it:
@@ -186,6 +190,14 @@ def main() -> int:
     action="store_true",
     default=False,
     help="Automatically run update commands. THIS IS DANGEROUS!",
+  )
+
+  parser.add_argument(
+    "-c",
+    "--copy",
+    action="store_true",
+    default=False,
+    help="Automatically copy update commands to the clipboard. They're not run unless -y is passed",
   )
 
   group = parser.add_mutually_exclusive_group()
@@ -288,11 +300,17 @@ def branches(args: argparse.Namespace) -> int:
     update_commands = []  # Unexpected
 
   if len(update_commands) > 0 and not args.quiet:
-    print(" && \\\n".join(update_commands))
+    update_command_shown = " && \\\n".join(update_commands)
+    print(update_command_shown)
     print()
-    if not args.no and (
-      args.yes or ("PYTEST_CURRENT_TEST" not in os.environ and prompt("Run update command?"))
-    ):
+    run, copy = args.yes, args.copy
+    if not (args.yes or args.no or args.copy) and "PYTEST_CURRENT_TEST" not in os.environ:
+      choice = prompt("Run update command?")
+      run, copy = choice == "y", choice == "c"
+
+    if copy:
+      copy_to_clipboard(update_command_shown)
+    if run:
       sys.stdout.flush()
       ret = subprocess.run(
         " && ".join(update_commands), shell=True, stderr=subprocess.STDOUT, check=False
@@ -1400,11 +1418,13 @@ def pull_request(branch: StrBranchName, github_token: str, git_utils: GitUtils) 
     return None
 
 
-def prompt(question: str, default: bool | None = False) -> bool | None:
-  valid = {"yes": True, "y": True, "ye": True, "no": False, "n": False}
+def prompt(question: str, default: str = "n") -> str:
+  """Asks `question` until it's answered, and returns "y" (yes), "n" (no) or "c" (copy)"""
+  valid = {"yes": "y", "y": "y", "ye": "y", "no": "n", "n": "n", "copy": "c", "c": "c"}
+  options = "/".join(option.upper() if option == default else option for option in "ync")
 
   while True:
-    sys.stdout.write(question + {None: " [y/n] ", True: " [Y/n] ", False: " [y/N] "}[default])
+    sys.stdout.write(f"{question} [{options}] ")
 
     try:
       choice = input().lower().strip()
@@ -1413,10 +1433,36 @@ def prompt(question: str, default: bool | None = False) -> bool | None:
 
     if choice in valid:
       return valid[choice]
-    elif choice == "" and default is not None:
+    elif choice == "":
       return default
     else:
-      sys.stdout.write("Please respond with 'yes' or 'no' (or 'y' or 'n').\n")
+      sys.stdout.write("Please respond with 'yes', 'no' or 'copy' (or 'y', 'n' or 'c').\n")
+
+
+def copy_to_clipboard(text: str) -> None:
+  """Copies `text` to the clipboard with the first clipboard tool that works, falling back to the
+  OSC 52 escape sequence, which terminals that support it use to set the clipboard (even over SSH).
+  Fails silently if none of them work.
+  """
+  tools = [
+    ["pbcopy"],
+    ["wl-copy"],
+    ["xclip", "-selection", "clipboard"],
+    ["xsel", "--clipboard", "--input"],
+  ]
+  for tool in tools:
+    if shutil.which(tool[0]) is None:
+      continue
+    # xclip and wl-copy stay in the background to serve the clipboard, so don't capture their
+    # output: waiting for it to close would hang
+    result = subprocess.run(
+      tool, input=text, text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
+    )
+    if result.returncode == 0:
+      return
+
+  sys.stdout.write(f"\033]52;c;{base64.b64encode(text.encode()).decode()}\a")
+  sys.stdout.flush()
 
 
 if __name__ == "__main__":
