@@ -39,7 +39,7 @@ branches
 branches --help
 ```
 
-`branches --help` describes the operations (`amend`, `squash`), the table columns and the symbols in them, and shows examples. `-n` (decline) and `-y` (run) are mutually exclusive ways to answer the update commands prompt without being asked.
+`branches --help` describes the operations (`amend`, `squash`), the table columns and the symbols in them, and shows examples. `-n` (decline) and `-y` (run) are mutually exclusive ways to answer the update commands prompt without being asked. `-c` copies the update commands to the clipboard without asking, and doesn't run them unless `-y` is passed too. Answer `c` at the prompt to copy them instead of running them.
 
 ## Assumptions and requirements
 

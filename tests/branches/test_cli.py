@@ -67,11 +67,12 @@ def run_test(
   httpserver: HTTPServer | None = None,
   trigger_command_dir: str | None = None,
   directory: str | None = None,
+  envars: list[str] | None = None,
 ):
   if expected_graph is not None:
     assert_graph(expected_graph)
 
-  envars = [f"PYTHONPATH='{SRC_DIRPATH}'"]
+  envars = [f"PYTHONPATH='{SRC_DIRPATH}'", *(envars or [])]
   if httpserver is not None:
     envars += [
       "GITHUB_PROTO='http'",
@@ -5446,4 +5447,150 @@ def test_properties(httpserver: HTTPServer):
       r"                                                                 ",
     ],
     httpserver=httpserver,
+  )
+
+
+def test_prompt(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+  """
+  Description:
+    Tests the answers to the update commands prompt
+  """
+  monkeypatch.syspath_prepend(SRC_DIRPATH)
+  from branches.cli import prompt
+
+  for answer, expected in [("y", "y"), ("YES", "y"), ("n", "n"), ("", "n"), ("c", "c")]:
+    monkeypatch.setattr("builtins.input", lambda answer=answer: answer)
+    assert prompt("Run update command?") == expected
+  assert capsys.readouterr().out == "Run update command? [y/N/c] " * 5
+
+  answers = iter(["what", "copy"])
+  monkeypatch.setattr("builtins.input", lambda: next(answers))
+  assert prompt("Run update command?") == "c"
+  assert capsys.readouterr().out == (
+    "Run update command? [y/N/c] "
+    "Please respond with 'yes', 'no' or 'copy' (or 'y', 'n' or 'c').\n"
+    "Run update command? [y/N/c] "
+  )
+
+
+def test_copy_to_clipboard(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+  """
+  Description:
+    Tests that the first clipboard tool that works is used, falling back to the OSC 52 escape
+    sequence when none does
+  """
+  monkeypatch.syspath_prepend(SRC_DIRPATH)
+  from branches import cli
+
+  calls = []
+
+  def run(tool, **kwargs):
+    calls.append((tool, kwargs["input"]))
+    return CompletedProcess(tool, 0 if tool[0] == "xclip" else 1)
+
+  monkeypatch.setattr(cli.subprocess, "run", run)
+  monkeypatch.setattr(
+    cli.shutil, "which", lambda tool: None if tool == "pbcopy" else f"/usr/bin/{tool}"
+  )
+  cli.copy_to_clipboard("git pull")
+  assert calls == [
+    (["wl-copy"], "git pull"),
+    (["xclip", "-selection", "clipboard"], "git pull"),
+  ]
+  assert capsys.readouterr().out == ""
+
+  calls.clear()
+  monkeypatch.setattr(cli.shutil, "which", lambda tool: None)
+  cli.copy_to_clipboard("git pull")
+  assert calls == []
+  assert capsys.readouterr().out == "\033]52;c;Z2l0IHB1bGw=\a"
+
+
+def test_copy(tmp_path: Path):
+  """
+  Description:
+    Tests that -c copies the update commands to the clipboard exactly as shown, without running
+    them unless -y is passed too. A fake pbcopy, first in PATH, writes the clipboard to a file.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  clipboard = tmp_path / "clipboard"
+  pbcopy = tmp_path / "pbcopy"
+  pbcopy.write_text(f"#!/bin/sh\ncat > '{clipboard}'\n")
+  pbcopy.chmod(0o755)
+
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    commit("B", now + sec * 2),
+    "git push",
+    "git reset --hard HEAD~1",
+    "git checkout -b branch1",
+    commit("C", now + sec * 3),
+  )
+  graph = r"""
+    *         C (HEAD -> branch1)
+    | *       B (origin/main)
+    |/
+    *         A (main)
+    """
+  run_test(
+    graph,
+    "branches -c",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main            ",
+      r"          \w{5}    0  0 1  branch1         ",
+      r"                                           ",
+      r"git checkout main && git pull && \\",
+      r"git checkout branch1 && git rebase main",
+      r"",
+    ],
+    envars=[f"PATH='{tmp_path}':$PATH"],
+  )
+  assert clipboard.read_text() == (
+    "git checkout main && git pull && \\\ngit checkout branch1 && git rebase main"
+  )
+  assert_graph(graph)
+
+  clipboard.unlink()
+  run_test(
+    None,
+    "branches -c -y",
+    [
+      r"                                           ",
+      r" Origin - Local  Age <- -> Branch  Base PR ",
+      r" ───────────────────────────────────────── ",
+      r"  \w{5} > \w{5}    0  0 0  main            ",
+      r"          \w{5}    0  0 1  branch1         ",
+      r"                                           ",
+      r"git checkout main && git pull && \\",
+      r"git checkout branch1 && git rebase main",
+      r"",
+      r"Switched to branch 'main'",
+      r"Your branch is behind 'origin/main' by 1 commit, and can be fast-forwarded.",
+      r"  \(use \"git pull\" to update your local branch\)",
+      r"Updating \w{7}..\w{7}",
+      r"Fast-forward",
+      r" B.txt \| 1 \+",
+      r" 1 file changed, 1 insertion\(\+\)",
+      r" create mode 100644 B.txt",
+      r"Switched to branch 'branch1'",
+      r"Rebasing \(1/1\)",
+      r"Successfully rebased and updated refs/heads/branch1.",
+    ],
+    envars=[f"PATH='{tmp_path}':$PATH"],
+  )
+  assert clipboard.read_text() == (
+    "git checkout main && git pull && \\\ngit checkout branch1 && git rebase main"
+  )
+  assert_graph(
+    r"""
+    *         C (HEAD -> branch1)
+    *         B (origin/main, origin/HEAD, main)
+    *         A
+    """
   )
