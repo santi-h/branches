@@ -79,17 +79,6 @@ COLUMNS = {
     "column_name": "->",
     "column_props": {"justify": "left"},
   },
-  # Properties columns: blank header, hidden when no row has the property
-  "locked": {
-    "column_name": "",
-    "column_props": None,
-    "hide_if_empty": True,
-  },
-  "conflicts": {
-    "column_name": "",
-    "column_props": None,
-    "hide_if_empty": True,
-  },
   "branch": {
     "column_name": "Branch",
     "column_props": None,
@@ -145,9 +134,8 @@ def main() -> int:
         Local   SHA of the local branch
         Age     days since the last commit
         <-      commits behind the base branch
-        ->      commits ahead of the base branch
-                branch properties, one blank-headed column each, shown only when
-                some branch has it:
+        ->      commits ahead of the base branch, followed by the branch properties:
+                  M  merge commits: the branch has merge commits
                   L  locked: someone else's open PR
                   C  conflicts: rebasing onto its base would conflict
         Branch  branch name
@@ -326,12 +314,6 @@ def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> 
     row_dict = table_row(db, branch, git_utils, show_warnings)
     show_warnings = False
     table.add_row(*[row_dict.get(column_key) for column_key in COLUMNS])
-
-  table.columns = [
-    column
-    for column, column_attr in zip(table.columns, COLUMNS.values(), strict=True)
-    if not column_attr.get("hide_if_empty") or any(column.cells)
-  ]
 
   return db
 
@@ -524,13 +506,17 @@ def table_row(
     if row_dict["relationship"] in ["Y", "R"]:
       row_dict["relationship"] = "[yellow]" + row_dict["relationship"] + "[/yellow]"
 
+  properties = ""
+  if db["local"][branch]["has_merge_commits"]:
+    properties += f"[{MERGE_COMMIT_COLOR}]M[/{MERGE_COMMIT_COLOR}]"
+
   if is_locked(db, branch):
-    row_dict["locked"] = "[magenta]L[/magenta]"
+    properties += "[magenta]L[/magenta]"
 
   if branch != default:
     future_tree(db, branch, git_utils)
     if db["local"][branch]["conflicts"]:
-      row_dict["conflicts"] = "[red]C[/red]"
+      properties += "[red]C[/red]"
 
   if sync_status in ["synced", "unsynced"] and branch != default:
     owner, repo = git_utils.owner_and_repo()
@@ -586,8 +572,8 @@ def table_row(
     row_dict["ahead"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['ahead']}[/{CURRENT_BRANCH_COLOR}]"
     row_dict["behind"] = f"[{CURRENT_BRANCH_COLOR}]{row_dict['behind']}[/{CURRENT_BRANCH_COLOR}]"
 
-  if db["local"][branch]["has_merge_commits"]:
-    row_dict["ahead"] = f"{row_dict['ahead']} [{MERGE_COMMIT_COLOR}]M[/{MERGE_COMMIT_COLOR}]"
+  if properties:
+    row_dict["ahead"] = f"{row_dict['ahead']} {properties}"
 
   return row_dict
 
