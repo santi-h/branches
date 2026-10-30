@@ -4554,3 +4554,67 @@ def test_conflicts3():
       r"",
     ],
   )
+
+
+def test_conflicts4():
+  """
+  Description:
+    branch2 and branch3 are stacked on branch1, and branch4 forks off branch1~1. branch2 conflicts
+    with main, so it's not rebased, but branch1, branch3, branch4 and branch5 are. This leaves
+    branch2 on branch1's old commits.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1, file="F"),
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    commit("C", now + sec * 3),
+    "git checkout -b branch2",
+    commit("D", now + sec * 4, file="F"),
+    "git checkout -b branch3 branch1",
+    commit("E", now + sec * 5),
+    "git checkout -b branch4 branch1~1",
+    commit("G", now + sec * 6),
+    "git checkout -b branch5 main",
+    commit("H", now + sec * 7),
+    "git checkout main",
+    commit("I", now + sec * 8, file="F"),
+  )
+  run_test(
+    r"""
+    *         I (HEAD -> main)
+    | *       H (branch5)
+    |/
+    | *       G (branch4)
+    | | *     E (branch3)
+    | | | *   D (branch2)
+    | | |/
+    | | *     C (branch1)
+    | |/
+    | *       B
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                                  ",
+      r" Origin - Local  Age <- ->   Branch  Base      PR ",
+      r" ──────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0    main                 ",
+      r"          \w{5}    0  1 1    branch5              ",
+      r"          \w{5}    0  1 2    branch4 branch1~1    ",
+      r"          \w{5}    0  1 3    branch3 branch1      ",
+      r"          \w{5}    0  1 3  C branch2 branch1      ",
+      r"          \w{5}    0  1 2    branch1              ",
+      r"                                                  ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch4 && git rebase --onto branch1~1 branch4~1 && \\",
+      r"git checkout branch3 && git rebase --onto branch1 branch3~1 && \\",
+      r"git checkout branch5 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+  )
