@@ -4611,3 +4611,246 @@ def test_conflicts4():
       r"",
     ],
   )
+
+
+def test_stack1():
+  """
+  Description:
+    Same as test_conflicts4, but the current branch is branch3 and only its stack is shown. The
+    stack is not rebased, since branch2 has conflicts.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1, file="F"),
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    commit("C", now + sec * 3),
+    "git checkout -b branch2",
+    commit("D", now + sec * 4, file="F"),
+    "git checkout -b branch3 branch1",
+    commit("E", now + sec * 5),
+    "git checkout -b branch4 branch1~1",
+    commit("G", now + sec * 6),
+    "git checkout -b branch5 main",
+    commit("H", now + sec * 7),
+    "git checkout main",
+    commit("I", now + sec * 8, file="F"),
+    "git checkout branch3",
+  )
+  run_test(
+    r"""
+    *         I (main)
+    | *       H (branch5)
+    |/
+    | *       G (branch4)
+    | | *     E (HEAD -> branch3)
+    | | | *   D (branch2)
+    | | |/
+    | | *     C (branch1)
+    | |/
+    | *       B
+    |/
+    *         A
+    """,
+    "branches -s",
+    [
+      r"                                                  ",
+      r" Origin - Local  Age <- ->   Branch  Base      PR ",
+      r" ──────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0    main                 ",
+      r"          \w{5}    0  1 3    branch3 branch1      ",
+      r"          \w{5}    0  1 2    branch1              ",
+      r"          \w{5}    0  1 3  C branch2 branch1      ",
+      r"          \w{5}    0  1 2    branch4 branch1~1    ",
+      r"                                                  ",
+    ],
+  )
+
+
+def test_stack2(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked7, but only the stack of the current branch is shown. The stack is not
+    rebased, since branch1 is locked.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    *locked_prep(now, sec),
+    "git checkout -b branch2 branch1",
+    commit("D", now + sec * 4),
+    "git checkout -b branch3",
+    commit("E", now + sec * 5),
+  )
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(
+      ["main", "branch3", "branch2", "branch1"], {"branch1": {"state": "open"}}
+    ),
+  )
+  run_test(
+    r"""
+    *         E (HEAD -> branch3)
+    *         D (branch2)
+    | *       C (origin/main, main)
+    * |       B (origin/branch1, branch1)
+    |/
+    *         A
+    """,
+    "branches -s",
+    [
+      r"                                                                   ",
+      r" Origin - Local  Age <- ->   Branch  Base    PR                    ",
+      r" ───────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0    main                                  ",
+      r"          \w{5}!   0  1 3    branch3 branch2                       ",
+      r"          \w{5}!   0  1 2    branch2 branch1                       ",
+      r" !\w{5}   \w{5}!   0  1 1  L branch1         #1 \(\w{5}\) by someone ",
+      r"                                                                   ",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def locked_conflicts_prep(now: datetime, sec: timedelta) -> list[str]:
+  """Returns commands that create branch1, locked, with branch2 stacked on it, with conflicts
+
+  branch1 has B by another author and C, and is in sync with origin. branch2 changes the same file
+  as main does since branch1 branched off.
+  """
+  return [
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1, file="F"),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2, "Name <me@git.com>"),
+    commit("C", now + sec * 3),
+    "git push",
+    "git checkout -b branch2",
+    commit("D", now + sec * 4, file="F"),
+    "git checkout main",
+    commit("E", now + sec * 5, file="F"),
+    "git push",
+  ]
+
+
+def test_stack3(httpserver: HTTPServer):
+  """
+  Description:
+    branch1 is locked and branch2, stacked on it, has conflicts. The stack is not rebased.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(*locked_conflicts_prep(now, sec), "git checkout branch2")
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(["main", "branch2", "branch1"], {"branch1": {"state": "open"}}),
+  )
+  run_test(
+    r"""
+    *         E (origin/main, main)
+    | *       D (HEAD -> branch2)
+    | *       C (origin/branch1, branch1)
+    | *       B
+    |/
+    *         A
+    """,
+    "branches -s",
+    [
+      r"                                                                     ",
+      r" Origin - Local  Age <- ->     Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0      main                                  ",
+      r"          \w{5}!   0  1 3    C branch2 branch1                       ",
+      r" !\w{5}   \w{5}!   0  1 2  L   branch1         #1 \(\w{5}\) by someone ",
+      r"                                                                     ",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_stack4(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_stack3, but amending branch1. Locks and conflicts don't apply to amend: branch1 is
+    amended and branch2 is restacked on top of it. branch1 is not pushed, since it has a commit by
+    another author.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(*locked_conflicts_prep(now, sec), "git checkout branch1", "echo 'X' > X.txt")
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(["main", "branch1", "branch2"], {"branch1": {"state": "open"}}),
+  )
+  run_test(
+    r"""
+    *         E (origin/main, main)
+    | *       D (branch2)
+    | *       C (HEAD -> branch1, origin/branch1)
+    | *       B
+    |/
+    *         A
+    """,
+    "branches amend",
+    [
+      r"                                                                     ",
+      r" Origin - Local  Age <- ->     Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0      main                                  ",
+      r" !\w{5}   \w{5}!   0  1 2  L   branch1         #1 \(\w{5}\) by someone ",
+      r"          \w{5}!   0  1 3    C branch2 branch1                       ",
+      r"                                                                     ",
+      r"git add -A && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_stack5(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_stack4, but squashing C into B on branch1.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(*locked_conflicts_prep(now, sec), "git checkout branch1")
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(["main", "branch1", "branch2"], {"branch1": {"state": "open"}}),
+  )
+  run_test(
+    r"""
+    *         E (origin/main, main)
+    | *       D (branch2)
+    | *       C (HEAD -> branch1, origin/branch1)
+    | *       B
+    |/
+    *         A
+    """,
+    "branches squash",
+    [
+      r"                                                                     ",
+      r" Origin - Local  Age <- ->     Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0      main                                  ",
+      r" !\w{5}   \w{5}!   0  1 2  L   branch1         #1 \(\w{5}\) by someone ",
+      r"          \w{5}!   0  1 3    C branch2 branch1                       ",
+      r"                                                                     ",
+      r"git reset --soft HEAD~1 && git commit --amend --no-edit && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
