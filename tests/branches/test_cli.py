@@ -4617,7 +4617,7 @@ def test_stack1():
   """
   Description:
     Same as test_conflicts4, but the current branch is branch3 and only its stack is shown. The
-    stack is not rebased, since branch2 has conflicts.
+    stack is rebased even though branch2 has conflicts.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -4666,6 +4666,11 @@ def test_stack1():
       r"          \w{5}    0  1 3  C branch2 branch1      ",
       r"          \w{5}    0  1 2    branch4 branch1~1    ",
       r"                                                  ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch4 && git rebase --onto branch1~1 branch4~1 && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch3 && git rebase --onto branch1 branch3~1",
+      r"",
     ],
   )
 
@@ -4673,8 +4678,8 @@ def test_stack1():
 def test_stack2(httpserver: HTTPServer):
   """
   Description:
-    Same as test_locked7, but only the stack of the current branch is shown. The stack is not
-    rebased, since branch1 is locked.
+    Same as test_locked7, but only the stack of the current branch is shown. The stack is rebased
+    even though branch1 is locked. branch1 is not pushed, since it has a commit by another author.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -4711,6 +4716,10 @@ def test_stack2(httpserver: HTTPServer):
       r"          \w{5}!   0  1 2    branch2 branch1                       ",
       r" !\w{5}   \w{5}!   0  1 1  L branch1         #1 \(\w{5}\) by someone ",
       r"                                                                   ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch3 && git rebase --onto branch2 branch3~1",
+      r"",
     ],
     httpserver=httpserver,
   )
@@ -4741,7 +4750,7 @@ def locked_conflicts_prep(now: datetime, sec: timedelta) -> list[str]:
 def test_stack3(httpserver: HTTPServer):
   """
   Description:
-    branch1 is locked and branch2, stacked on it, has conflicts. The stack is not rebased.
+    branch1 is locked and branch2, stacked on it, has conflicts. The stack is rebased anyway.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -4769,6 +4778,9 @@ def test_stack3(httpserver: HTTPServer):
       r"          \w{5}!   0  1 3    C branch2 branch1                       ",
       r" !\w{5}   \w{5}!   0  1 2  L   branch1         #1 \(\w{5}\) by someone ",
       r"                                                                     ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1",
+      r"",
     ],
     httpserver=httpserver,
   )

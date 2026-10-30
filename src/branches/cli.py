@@ -155,7 +155,7 @@ def main() -> int:
 
       Examples:
         branches                 show branches and suggest update commands
-        branches -s              show a short list
+        branches -s              show and update the current branch's stack only
         branches -C ~/code/repo  run on another repository
         branches amend           amend the current commit and update dependent branches
         branches squash -y       squash and run the update commands without asking
@@ -195,7 +195,12 @@ def main() -> int:
   group = parser.add_mutually_exclusive_group()
   group.add_argument("operation", nargs="?", choices=["amend", "squash"], help="Operation")
   group.add_argument(
-    "-s", "--stack", action="store_true", default=False, help="Show a short list only"
+    "-s",
+    "--stack",
+    action="store_true",
+    default=False,
+    help="Show the current branch's stack only, and suggest updating it even if it's locked or has"
+    " conflicts",
   )
 
   ret = 1
@@ -247,7 +252,7 @@ def branches(args: argparse.Namespace) -> int:
   print()
 
   if args.operation is None:
-    update_commands = generate_update_commands(db, git_utils, args.no_push)
+    update_commands = generate_update_commands(db, git_utils, args.no_push, force=args.stack)
   elif args.operation in ["amend", "squash"]:
     if len(git_utils.current_branch() or "") <= 0:
       print(f"Cannot run {args.operation} on a detached HEAD. Check out a branch first.\n")
@@ -960,9 +965,16 @@ def generate_rewrite_commands(
 
 
 def generate_update_commands(
-  db: dict, git_utils: GitUtils, no_push: bool = False, is_amend: bool = False
+  db: dict,
+  git_utils: GitUtils,
+  no_push: bool = False,
+  is_amend: bool = False,
+  force: bool = False,
 ) -> list[StrCommand]:
-  """Creates and returns the list of git commands to run to update the branches."""
+  """Creates and returns the list of git commands to run to update the branches.
+
+  With `force`, stacks with locked or conflicted branches are rebased too.
+  """
   update_commands = []
   default = db["default"]
   current_original = db["current"]
@@ -1080,7 +1092,7 @@ def generate_update_commands(
   if branches_to_rebase:
     base_branches = refresh_bases(db["local"], db["default"])
     rebased_branches: set[StrBranchName] = set()
-    frozen = frozen_branches(db)
+    frozen = set() if force else frozen_branches(db)
 
     for branch in rebase_order(base_branches) + sorted(branches_to_rebase):
       if branch in frozen or branch not in branches_to_rebase or branch in rebased_branches:
