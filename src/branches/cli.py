@@ -502,6 +502,10 @@ def table_row(
     else:
       message_remote_sha = f"[bold]{remote_sha_short}[/bold]"
 
+    # Origin of an open PR is followed even if it has commits by other authors
+    if db["local"][branch]["pr_status"] == "open" and db["remote"][branch]["rebased_copy"]:
+      db["remote"][branch]["relationship"] = "R"
+
     row_dict["relationship"] = db["remote"][branch]["relationship"]
     if row_dict["relationship"] in ["Y", "R"]:
       row_dict["relationship"] = "[yellow]" + row_dict["relationship"] + "[/yellow]"
@@ -731,6 +735,7 @@ def construct_empty_remote(remote_sha: StrSha) -> dict:
     "distance_default_local": None,
     "shas_ahead_default_local": [],
     "shas_ahead_default_local_other_authors": set(),
+    "rebased_copy": False,
   }
 
 
@@ -816,18 +821,18 @@ def construct_remote(
     if email != local_email and branch != default:
       ret["shas_ahead_default_local_other_authors"].add(email)
 
-  if (
+  ret["rebased_copy"] = (
     ret["relationship"] == "Y"
     and branch != default
-    and ret["shas_ahead_default"]
-    and not ret["shas_ahead_default_other_authors"]
+    and bool(ret["shas_ahead_default"])
     and forks_from_newer_default(git_utils, local_sha, remote_sha, remote_default_sha)
     and is_rebased_copy(
       git_utils,
       git_utils.shas_ahead_of(default_sha, local_sha),
       [shad["sha"] for shad in ret["shas_ahead_default"]],
     )
-  ):
+  )
+  if ret["rebased_copy"] and not ret["shas_ahead_default_other_authors"]:
     ret["relationship"] = "R"
 
   return ret
@@ -1040,7 +1045,10 @@ def generate_update_commands(
   if not is_amend:
     for branch in sorted(db["remote"].keys() - branches_to_delete - {default}):
       branchd = db["remote"][branch]
-      if branchd["relationship"] == ">" and not branchd["shas_ahead_default_local_other_authors"]:
+      if branchd["relationship"] == ">" and (
+        not branchd["shas_ahead_default_local_other_authors"]
+        or db["local"][branch]["pr_status"] == "open"
+      ):
         update_commands.append(f"git checkout {branch} && git pull")
         current = branch
         branches_pulled.add(branch)

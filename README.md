@@ -89,6 +89,7 @@ The script does not run any write `git` command. It only outputs suggested `git`
 
 - Push the branches that are currently in sync with `origin` and the current user is the only author.
 - Safely pull updates that exist in `origin` but not locally, both for the main (i.e. default) branch and for the feature branches.
+- Follow `origin` on branches with someone else's open PR when it gets new commits or is rebased, so they stay locked instead of being rebased locally.
 
 All suggestions are meant to be as safe as possible. For example, in order for it to suggest a branch to be deleted, all these conditions need to be satisfied:
 
