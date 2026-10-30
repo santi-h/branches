@@ -10,7 +10,7 @@ Serves three purposes:
 
 1. [**Getting relevant branches info**](#purpose-1-getting-relevant-branches-info): Alternative to `git branch`. Provides useful information about local branches.
 2. [**Keeping branches up to date**](#purpose-2-keeping-branches-up-to-date): Outputs a list of `git` commands that the user can choose to run to catch up their branches to the main branch.
-3. [**Helping amend commits while keeping the tree structure intact**](#purpose-3-helping-amend-commits-while-keeping-the-tree-structure-intact): Outputs a list of `git` commands that the user can choose to run to amend the last commit and keep the tree structure of all dependent branches intact.
+3. [**Helping amend or squash commits while keeping the tree structure intact**](#purpose-3-helping-amend-or-squash-commits-while-keeping-the-tree-structure-intact): Outputs a list of `git` commands that the user can choose to run to amend or squash the last commit and keep the tree structure of all dependent branches intact.
 
 ## Installation / Upgrading
 
@@ -101,7 +101,7 @@ The command that it outputs is a suggestion and the user makes the call whether 
 
 The update commands follow a no-merge approach. All update suggestions are `rebase` operations. If a branch contains merge commits, no rebase operation will ever be suggested for that branch.
 
-## Purpose 3: Helping amend commits while keeping the tree structure intact
+## Purpose 3: Helping amend or squash commits while keeping the tree structure intact
 
 Let's say we have a structure like this:
 
