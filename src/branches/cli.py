@@ -597,27 +597,45 @@ def is_locked(db: dict, branch: StrBranchName) -> bool:
 
 
 def frozen_branches(db: dict) -> set[StrBranchName]:
-  """Returns the branches in stacks that won't be rebased because a branch in them is locked or has
-  conflicts
+  """Returns the branches that won't be rebased because of a locked or conflicted branch
 
   A stack is the tree of branches connected through their base, from the branch based on the default
-  branch down to all its descendants. Rebasing any part of it would leave the locked or conflicted
-  branch on the old copies of the commits it shares with the rest of the stack.
+  branch down to all its descendants. If a branch in a stack has conflicts, the whole stack is
+  frozen: rebasing any part of it would leave the conflicted branch on the old copies of the commits
+  it shares with the rest of the stack.
+
+  A locked branch freezes itself and the branches it's stacked on, for the same reason. Branches
+  stacked on a frozen branch are only rebased if they follow a base that was reset to its origin,
+  which doesn't move the frozen branch.
   """
   default = db["default"]
+  local = db["local"]
 
-  def stack_root(branch: StrBranchName) -> StrBranchName:
-    while (base := db["local"][branch]["base"]) != default and base in db["local"]:
+  def lineage(branch: StrBranchName) -> list[StrBranchName]:
+    """Returns `branch` followed by the branches it's stacked on, down to its stack's root"""
+    ret = [branch]
+    while (base := local[branch]["base"]) != default and base in local:
       branch = base
-    return branch
+      ret.append(branch)
+    return ret
 
-  branches = db["local"].keys() - {default}
-  blocked_roots = {
-    stack_root(branch)
-    for branch in branches
-    if is_locked(db, branch) or db["local"][branch].get("conflicts")
-  }
-  return {branch for branch in branches if stack_root(branch) in blocked_roots}
+  branches = local.keys() - {default}
+  conflicted_roots = {lineage(branch)[-1] for branch in branches if local[branch].get("conflicts")}
+  frozen = {branch for branch in branches if lineage(branch)[-1] in conflicted_roots}
+  for branch in branches:
+    if is_locked(db, branch):
+      frozen.update(lineage(branch))
+
+  def stays(branch: StrBranchName) -> bool:
+    """Returns whether `branch` stays on top of a frozen branch"""
+    for ancestor in lineage(branch):
+      if ancestor in frozen:
+        return True
+      if local[ancestor].get("stacked_on"):
+        return False
+    return False
+
+  return {branch for branch in branches if stays(branch)}
 
 
 def future_tree(db: dict, branch: StrBranchName, git_utils: GitUtils) -> StrSha:
@@ -1045,15 +1063,15 @@ def generate_update_commands(
   if not is_amend:
     for branch in sorted(db["remote"].keys() - branches_to_delete - {default}):
       branchd = db["remote"][branch]
-      if branchd["relationship"] == ">" and (
-        not branchd["shas_ahead_default_local_other_authors"]
-        or db["local"][branch]["pr_status"] == "open"
-      ):
+      if branchd["relationship"] == ">" and not branchd["shas_ahead_default_local_other_authors"]:
         update_commands.append(f"git checkout {branch} && git pull")
         current = branch
         branches_pulled.add(branch)
-      elif branchd["relationship"] == "R":
-        # Origin is a rebased copy of local (e.g. GitHub rebased a stacked PR). Follow origin.
+      elif branchd["relationship"] == "R" or (
+        branchd["relationship"] == ">" and db["local"][branch]["pr_status"] == "open"
+      ):
+        # Origin is a rebased copy of local (e.g. GitHub rebased a stacked PR), or someone else's
+        # open PR moved it ahead. Follow origin.
         if branch == current:
           update_commands.append(f"git reset --keep {branchd['sha']}")
         else:
@@ -1268,7 +1286,8 @@ def refresh_bases(
   - distance_base
 
   A branch with "stacked_on" (base branch, old base sha) uses that base branch, unless it has a
-  closer base already. This keeps branches stacked on top of a branch that was reset to its origin.
+  closer base already. On a tie it wins, so it follows the tip of the base branch instead of the old
+  base sha (e.g. `branch~1`). This keeps branches stacked on top of a branch that was reset to its origin.
   """
   ret = base_branches_from_branches_ahead_refs(branches_ahead_shas_to_refs(local))
 
@@ -1285,7 +1304,7 @@ def refresh_bases(
       shas = [shad["sha"] for shad in branchd["shas_ahead_default"]]
       if old_base_sha in shas:
         ahead = len(shas) - 1 - shas.index(old_base_sha)
-        if ahead < branchd["distance_base"][1]:
+        if ahead <= branchd["distance_base"][1]:
           branchd["base"] = base_branch
           branchd["distance_base"] = (0, ahead)
           ret[branch] = (base_branch, 0, ahead)
