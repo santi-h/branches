@@ -4507,8 +4507,8 @@ def test_conflicts3():
   Description:
     Stacked branches. branch2 is stacked on branch1, which rebases cleanly onto main. branch2
     conflicts with main. branch4 is stacked on branch3, which conflicts with main, so branch4 is
-    checked against branch3 as is, and doesn't conflict. Only branch1 is rebased: branch2 and
-    branch3 have conflicts, and branch4 stays stacked on branch3.
+    checked against branch3 as is, and doesn't conflict. Nothing is rebased: both stacks have a
+    branch with conflicts, so rebasing branch1 would leave branch2 behind.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -4549,9 +4549,6 @@ def test_conflicts3():
       r"          \w{5}    0  1 2  C branch2 branch1    ",
       r"          \w{5}    0  1 1    branch1            ",
       r"                                                ",
-      r"git checkout branch1 && git rebase main && \\",
-      r"git checkout main",
-      r"",
     ],
   )
 
@@ -4560,8 +4557,7 @@ def test_conflicts4():
   """
   Description:
     branch2 and branch3 are stacked on branch1, and branch4 forks off branch1~1. branch2 conflicts
-    with main, so it's not rebased, but branch1, branch3, branch4 and branch5 are. This leaves
-    branch2 on branch1's old commits.
+    with main, so none of them is rebased. branch5 is in its own stack, so it is.
   """
   now = datetime.now(UTC) - timedelta(hours=6)
   sec = timedelta(seconds=1)
@@ -4610,9 +4606,6 @@ def test_conflicts4():
       r"          \w{5}    0  1 3  C branch2 branch1      ",
       r"          \w{5}    0  1 2    branch1              ",
       r"                                                  ",
-      r"git checkout branch1 && git rebase main && \\",
-      r"git checkout branch4 && git rebase --onto branch1~1 branch4~1 && \\",
-      r"git checkout branch3 && git rebase --onto branch1 branch3~1 && \\",
       r"git checkout branch5 && git rebase main && \\",
       r"git checkout main",
       r"",
