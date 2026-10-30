@@ -4379,6 +4379,249 @@ def test_squash7():
   )
 
 
+def test_amend_message1():
+  """
+  Description:
+    `amend -m` with no changes rewords the last commit and restacks branch2 on top of it. The
+    message is quoted in the suggested command.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(*squash_prep(now, sec))
+  run_test(
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
+    """branches amend -m "It's \\$HOME" -y""",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      re.escape("""git add -A && git commit --amend -m 'It'"'"'s $HOME' && \\"""),
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch1",
+      r"",
+      r"\[branch1 \w{7}\] It's \$HOME",
+      r" Date: .*",
+      r" 1 file changed, 1 insertion\(\+\)",
+      r" create mode 100644 C.txt",
+      r"Switched to branch 'branch2'",
+      r"Rebasing \(1/1\)",
+      r"Successfully rebased and updated refs/heads/branch2.",
+      r"Switched to branch 'branch1'",
+    ],
+  )
+  assert_graph(
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     It's $HOME (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """
+  )
+
+
+def test_amend_message2():
+  """
+  Description:
+    `amend -m` with changes amends them into the last commit and replaces its message.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(*squash_prep(now, sec), "echo 'changed' >> C.txt")
+  run_test(
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
+    "branches amend --message 'C2'",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"git add -A && git commit --amend -m C2 && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch1",
+      r"",
+    ],
+  )
+
+
+def test_squash_message1():
+  """
+  Description:
+    `squash -m` squashes C into B with the given message and restacks branch2 and branch4.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(*squash_prep(now, sec))
+  run_test(
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
+    "branches squash -m 'B and C' -y",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"git reset --soft HEAD~1 && git commit --amend -m 'B and C' && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1 && \\",
+      r"git checkout branch4 && git rebase --onto branch1 branch4~1 && \\",
+      r"git checkout branch1",
+      r"",
+      r"\[branch1 \w{7}\] B and C",
+      r" Date: .*",
+      r" 2 files changed, 2 insertions\(\+\)",
+      r" create mode 100644 B.txt",
+      r" create mode 100644 C.txt",
+      r"Switched to branch 'branch2'",
+      r"Rebasing \(1/1\)",
+      r"Successfully rebased and updated refs/heads/branch2.",
+      r"Switched to branch 'branch4'",
+      r"Rebasing \(1/1\)",
+      r"Successfully rebased and updated refs/heads/branch4.",
+      r"Switched to branch 'branch1'",
+    ],
+  )
+  assert_graph(
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | |/
+    |/|
+    * |       B and C (HEAD -> branch1)
+    |/
+    *         A
+    """
+  )
+
+
+def test_squash_message2():
+  """
+  Description:
+    `squash -m` is still refused when there are uncommitted changes.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(*squash_prep(now, sec), "echo 'changed' >> C.txt")
+  run_test(
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
+    "branches squash -m 'B and C'",
+    [
+      r"                                                ",
+      r" Origin - Local  Age <- -> Branch  Base      PR ",
+      r" ────────────────────────────────────────────── ",
+      r"          \w{5}    0  0 0  main                 ",
+      r"          \w{5}    0  1 2  branch1              ",
+      r"          \w{5}    0  1 3  branch2 branch1      ",
+      r"          \w{5}    0  1 2  branch4 branch1~1    ",
+      r"                                                ",
+      r"Cannot run squash with uncommitted changes. Commit or stash them first.",
+      r"",
+    ],
+    expected_returncode=1,
+  )
+
+
+def test_message_without_operation():
+  """
+  Description:
+    -m is rejected without the amend or squash operation.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(*squash_prep(now, sec))
+  run_test(
+    r"""
+    *         G (branch4)
+    | *       F (branch3)
+    | | *     E (main)
+    | |/
+    | | *     D (branch2)
+    | | *     C (HEAD -> branch1)
+    | |/
+    |/|
+    * |       B
+    |/
+    *         A
+    """,
+    "branches -m 'C2'",
+    [],
+    expected_returncode=2,
+  )
+
+
 def test_rebase_current1():
   """
   Description:

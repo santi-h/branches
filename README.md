@@ -283,6 +283,8 @@ This is a trivial example. In practice it gets messier, there might be a lot mor
 
 `branches squash` does the same, but squashes the last commit into the one before it instead of amending it with uncommitted changes. The message of the commit before it is kept. Branches that branched off either of those two commits are restacked on top of the squashed commit.
 
+Both take `-m`/`--message` to replace the commit message. With `-m`, `branches amend` runs even if there are no changes, to only reword the last commit.
+
 ## Development: setup
 
 Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/), then:
