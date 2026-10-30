@@ -5109,3 +5109,96 @@ def test_stack5(httpserver: HTTPServer):
     ],
     httpserver=httpserver,
   )
+
+
+def test_properties(httpserver: HTTPServer):
+  """
+  Description:
+    One branch per combination of properties: M (merge commits), L (locked) and C (conflicts). The
+    letters in each branch name are the properties it has. Every branch forks off main, so each is
+    its own stack. M can't be combined with L: branches with merge commits don't track authors, so
+    they're never locked.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1, file="F"),
+    "git push",
+    "git checkout -b branchM",
+    commit("M2", now + sec * 2),
+    "git checkout -b side main",
+    commit("M3", now + sec * 3),
+    "git checkout branchM",
+    f"GIT_AUTHOR_DATE='{(now + sec * 4).isoformat()}' git merge --no-ff --no-edit side",
+    "git branch -D side",
+    "git checkout -b branchL main",
+    commit("L1", now + sec * 5, "Name <me@git.com>"),
+    commit("L2", now + sec * 6),
+    "git push",
+    "git checkout -b branchC main",
+    commit("C2", now + sec * 7, file="F"),
+    "git checkout -b branchMC main",
+    commit("MC2", now + sec * 8, file="F"),
+    "git checkout -b side main",
+    commit("MC3", now + sec * 9),
+    "git checkout branchMC",
+    f"GIT_AUTHOR_DATE='{(now + sec * 10).isoformat()}' git merge --no-ff --no-edit side",
+    "git branch -D side",
+    "git checkout -b branchLC main",
+    commit("LC1", now + sec * 11, "Name <me@git.com>"),
+    commit("LC2", now + sec * 12, file="F"),
+    "git push",
+    "git checkout main",
+    commit("B", now + sec * 13, file="F"),
+    "git push",
+  )
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(
+      ["main", "branchLC", "branchMC", "branchC", "branchL", "branchM"],
+      {"branchLC": {"state": "open"}, "branchL": {"state": "open"}},
+    ),
+  )
+  run_test(
+    r"""
+    *         B (HEAD -> main, origin/main)
+    | *       LC2 (origin/branchLC, branchLC)
+    | *       LC1
+    |/
+    | *       Merge branch 'side' into branchMC (branchMC)
+    | |\
+    | | *     MC3
+    | |/
+    |/|
+    | *       MC2
+    |/
+    | *       C2 (branchC)
+    |/
+    | *       L2 (origin/branchL, branchL)
+    | *       L1
+    |/
+    | *       Merge branch 'side' into branchM (branchM)
+    | |\
+    | | *     M3
+    | |/
+    |/|
+    | *       M2
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                                                    ",
+      r" Origin - Local  Age <- ->      Branch   Base PR                    ",
+      r" ────────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0       main                                ",
+      r" !\w{5}   \w{5}!   0  1 2   L C branchLC      #1 \(\w{5}\) by someone ",
+      r"          \w{5}    0  1 3 M   C branchMC                            ",
+      r"          \w{5}    0  1 1     C branchC                             ",
+      r" !\w{5}   \w{5}!   0  1 2   L   branchL       #2 \(\w{5}\) by someone ",
+      r"          \w{5}    0  1 3 M     branchM                             ",
+      r"                                                                    ",
+    ],
+    httpserver=httpserver,
+  )
