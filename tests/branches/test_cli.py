@@ -4030,6 +4030,66 @@ def test_locked12(httpserver: HTTPServer):
   )
 
 
+def test_locked13(httpserver: HTTPServer):
+  """
+  Description:
+    branch2 is locked and stacked on branch1, which is mine. branch3 is stacked on branch2 and
+    branch4 is stacked on branch1. None of them are behind their base.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    f"git init && git remote add origin {GIT_TMP_DIRPATH_ORIGIN}",
+    commit("A", now + sec * 1),
+    "git push",
+    "git checkout -b branch1",
+    commit("B", now + sec * 2),
+    "git push",
+    "git checkout -b branch2",
+    commit("D", now + sec * 4, "Name <me@git.com>"),
+    "git push",
+    "git checkout -b branch3",
+    commit("E", now + sec * 5),
+    "git checkout -b branch4 branch1",
+    commit("F", now + sec * 6),
+    "git checkout main",
+    commit("C", now + sec * 3),
+    "git push",
+  )
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(
+      ["main", "branch4", "branch3", "branch2", "branch1"], {"branch2": {"state": "open"}}
+    ),
+  )
+  run_test(
+    r"""
+    *         F (branch4)
+    | *       E (branch3)
+    | *       D (origin/branch2, branch2)
+    |/
+    | *       C (HEAD -> main, origin/main)
+    * |       B (origin/branch1, branch1)
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                                                  ",
+      r" Origin - Local  Age <- ->  Branch  Base    PR                    ",
+      r" ──────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0   main                                  ",
+      r"          \w{5}    0  1 2   branch4 branch1                       ",
+      r"          \w{5}!   0  1 3   branch3 branch2                       ",
+      r" !\w{5}   \w{5}!   0  1 2 L branch2 branch1 #1 \(\w{5}\) by someone ",
+      r"  \w{5}   \w{5}    0  1 1   branch1                               ",
+      r"                                                                  ",
+    ],
+    httpserver=httpserver,
+  )
+
+
 def squash_prep(now: datetime, sec: timedelta, author: str | None = None) -> list[str]:
   """Returns commands that create branch1 with two commits and branches stacked around it"""
   return [
