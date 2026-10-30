@@ -195,7 +195,7 @@ def main() -> int:
   group = parser.add_mutually_exclusive_group()
   group.add_argument("operation", nargs="?", choices=["amend", "squash"], help="Operation")
   group.add_argument(
-    "-s", "--short", action="store_true", default=False, help="Show a short list only"
+    "-s", "--stack", action="store_true", default=False, help="Show a short list only"
   )
 
   ret = 1
@@ -239,7 +239,7 @@ def branches(args: argparse.Namespace) -> int:
     table.add_column(column_attr["column_name"], **(column_attr["column_props"] or {}))
 
   if args.operation in ["amend", "squash"]:
-    args.short = True
+    args.stack = True
 
   with Live(table, console=console, refresh_per_second=20):
     db = print_table(args, table, git_utils)
@@ -303,7 +303,7 @@ def print_table(args: argparse.Namespace, table: Table, git_utils: GitUtils) -> 
     A dict with the required arguments to generate update commands. The keys of this dict must be
     the arguments to the function that outputs the update commands.
   """
-  db = create_db(git_utils, short=args.short)
+  db = create_db(git_utils, stack=args.stack)
   show_warnings = True
   for branch in db["local"]:
     row_dict = table_row(db, branch, git_utils, show_warnings)
@@ -324,7 +324,7 @@ def create_db(
   default: str | None = None,
   branches: list[str] | None = None,
   max_behind: int | None = None,
-  short=False,
+  stack=False,
   remote: dict[StrBranchName, dict] | None = None,
 ):
   if not default:
@@ -379,7 +379,7 @@ def create_db(
 
   refresh_distances(local, default, db["email"], git_utils)
 
-  for branch in local_branches_order(local, short, db["current"], db["default"]):
+  for branch in local_branches_order(local, stack, db["current"], db["default"]):
     if branch not in db["local"]:
       db["local"][branch] = local[branch]
 
@@ -646,7 +646,7 @@ def future_tree(db: dict, branch: StrBranchName, git_utils: GitUtils) -> StrSha:
 
 def local_branches_order(
   local: dict[str, dict],
-  short: bool,
+  stack: bool,
   current: StrBranchName,
   default: StrBranchName,
 ) -> list[StrBranchName]:
@@ -658,7 +658,7 @@ def local_branches_order(
   """
   all_branches = list(local.keys())
 
-  if short:
+  if stack:
     # maps base branches to the branches that depend on those base branches
     dependent_branches: dict[StrBranchName, list[StrBranchName]] = {}
     # maps a branch to its base branch
