@@ -3845,6 +3845,192 @@ def test_locked8(httpserver: HTTPServer):
   )
 
 
+def test_locked9(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked1, but the PR author pushed D to origin/branch1, so origin is ahead of local.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    *locked_prep(now, sec),
+    "git checkout -b tmp branch1",
+    commit("D", now + sec * 4, "Name <me@git.com>"),
+    "git push origin tmp:branch1",
+    "git checkout main",
+    "git branch -D tmp",
+  )
+  set_mockserver_expectations(
+    httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
+  )
+  run_test(
+    r"""
+    *         D (origin/branch1)
+    | *       C (HEAD -> main, origin/main)
+    * |       B (branch1)
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r" !\w{5} > \w{5}!   0  1 1  branch1      #1 \(\w{5}\) by someone ",
+      r"                                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked10(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked9, but there is a local only branch stacked on top of branch1.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    *locked_prep(now, sec),
+    "git checkout -b branch2 branch1",
+    commit("D", now + sec * 4),
+    "git checkout -b tmp branch1",
+    commit("E", now + sec * 5, "Name <me@git.com>"),
+    "git push origin tmp:branch1",
+    "git checkout branch2",
+    "git branch -D tmp",
+  )
+  set_mockserver_expectations(
+    httpserver,
+    other_author_pull_requests(["main", "branch2", "branch1"], {"branch1": {"state": "open"}}),
+  )
+  run_test(
+    r"""
+    *         E (origin/branch1)
+    | *       D (HEAD -> branch2)
+    |/
+    | *       C (origin/main, main)
+    * |       B (branch1)
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                                                 ",
+      r" Origin - Local  Age <- -> Branch  Base    PR                    ",
+      r" ─────────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                                  ",
+      r"          \w{5}!   0  1 2  branch2 branch1                       ",
+      r" !\w{5} > \w{5}!   0  1 1  branch1         #1 \(\w{5}\) by someone ",
+      r"                                                                 ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout branch2 && git rebase --onto branch1 branch2~1",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked11(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked1, but the PR author rebased origin/branch1 onto main, so origin is a rebased
+    copy of local.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    *locked_prep(now, sec),
+    "git checkout -b tmp main",
+    "git cherry-pick branch1",
+    # Later author date than C, so the order in `git_graph` is deterministic
+    f"GIT_COMMITTER_DATE='{(now + sec * 4).isoformat()}' git commit --amend --no-edit"
+    f" --date='{(now + sec * 4).isoformat()}'",
+    "git push -f origin tmp:branch1",
+    "git checkout main",
+    "git branch -D tmp",
+  )
+  set_mockserver_expectations(
+    httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
+  )
+  run_test(
+    r"""
+    *         B (origin/branch1)
+    *         C (HEAD -> main, origin/main)
+    | *       B (branch1)
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r" !\w{5} Y \w{5}!   0  1 1  branch1      #1 \(\w{5}\) by someone ",
+      r"                                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
+def test_locked12(httpserver: HTTPServer):
+  """
+  Description:
+    Same as test_locked9, but local branch1 also has D, which is not in origin.
+  """
+  now = datetime.now(UTC) - timedelta(hours=6)
+  sec = timedelta(seconds=1)
+
+  run_prep(
+    *locked_prep(now, sec),
+    "git checkout -b tmp branch1",
+    commit("E", now + sec * 5, "Name <me@git.com>"),
+    "git push origin tmp:branch1",
+    "git checkout branch1",
+    commit("D", now + sec * 4),
+    "git checkout main",
+    "git branch -D tmp",
+  )
+  set_mockserver_expectations(
+    httpserver, other_author_pull_requests(["main", "branch1"], {"branch1": {"state": "open"}})
+  )
+  run_test(
+    r"""
+    *         E (origin/branch1)
+    | *       D (branch1)
+    |/
+    | *       C (HEAD -> main, origin/main)
+    * |       B
+    |/
+    *         A
+    """,
+    "branches",
+    [
+      r"                                                              ",
+      r" Origin - Local  Age <- -> Branch  Base PR                    ",
+      r" ──────────────────────────────────────────────────────────── ",
+      r"  \w{5}   \w{5}    0  0 0  main                               ",
+      r" !\w{5} Y \w{5}!   0  1 2  branch1      #1 \(\w{5}\) by someone ",
+      r"                                                              ",
+      r"git checkout branch1 && git rebase main && \\",
+      r"git checkout main",
+      r"",
+    ],
+    httpserver=httpserver,
+  )
+
+
 def squash_prep(now: datetime, sec: timedelta, author: str | None = None) -> list[str]:
   """Returns commands that create branch1 with two commits and branches stacked around it"""
   return [
