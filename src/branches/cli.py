@@ -4,6 +4,7 @@ import argparse
 import copy
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -130,6 +131,8 @@ def main() -> int:
       branches that depend on it:
         amend   amend the last commit with your staged, unstaged and untracked changes
         squash  squash the last commit into the one before it
+      Pass -m to either operation to replace the commit message. With -m, amend runs
+      even if there are no changes, to only reword the last commit.
     """),
     epilog=dedent("""\
       Table columns:
@@ -159,6 +162,7 @@ def main() -> int:
         branches -C ~/code/repo  run on another repository
         branches amend           amend the current commit and update dependent branches
         branches squash -y       squash and run the update commands without asking
+        branches amend -m "msg"  reword the current commit and update dependent branches
     """),
   )
   parser.add_argument(
@@ -174,6 +178,10 @@ def main() -> int:
   )
 
   parser.add_argument("-C", "--path", type=str, help="Path to the git repository")
+
+  parser.add_argument(
+    "-m", "--message", type=str, help="Commit message for the amend and squash operations"
+  )
 
   confirm_group = parser.add_mutually_exclusive_group()
   confirm_group.add_argument(
@@ -203,9 +211,13 @@ def main() -> int:
     " conflicts",
   )
 
+  args = parser.parse_args()
+  if args.message is not None and args.operation is None:
+    parser.error("-m/--message requires the amend or squash operation")
+
   ret = 1
   try:
-    ret = branches(parser.parse_args())
+    ret = branches(args)
   except KeyboardInterrupt:
     print("Interrupted")
 
@@ -269,17 +281,17 @@ def branches(args: argparse.Namespace) -> int:
     )
 
     if args.operation == "amend":
-      if len(changes) <= 0:
+      if len(changes) <= 0 and args.message is None:
         print("No changes to amend with.\n")
         return 1
 
-      err, update_commands = generate_amend_commands(db, git_utils, args.no_push)
+      err, update_commands = generate_amend_commands(db, git_utils, args.no_push, args.message)
     else:
       if len(changes) > 0:
         print("Cannot run squash with uncommitted changes. Commit or stash them first.\n")
         return 1
 
-      err, update_commands = generate_squash_commands(db, git_utils, args.no_push)
+      err, update_commands = generate_squash_commands(db, git_utils, args.no_push, args.message)
 
     if len(err or "") > 0:
       print(err)
@@ -872,10 +884,16 @@ def is_rebased_copy(
   return True
 
 
+def commit_message_option(message: str | None) -> str:
+  """Returns the `git commit` option that sets `message`, or keeps the current one if None"""
+  return "--no-edit" if message is None else f"-m {shlex.quote(message)}"
+
+
 def generate_amend_commands(
-  db: dict, git_utils: GitUtils, no_push: bool = False
+  db: dict, git_utils: GitUtils, no_push: bool = False, message: str | None = None
 ) -> tuple[str | None, list[StrCommand] | None]:
-  """Returns a list of commands to run to amend the current commit and maintain tree structure
+  """Returns a list of commands to run to amend the current commit and maintain tree structure.
+  With `message`, the commit message is replaced.
 
   Returns:
     Tuple with two values:
@@ -883,15 +901,20 @@ def generate_amend_commands(
     2. A list of commands to run
   """
   return generate_rewrite_commands(
-    db, git_utils, "amend", "git add -A && git commit --amend --no-edit", 0, no_push
+    db,
+    git_utils,
+    "amend",
+    f"git add -A && git commit --amend {commit_message_option(message)}",
+    0,
+    no_push,
   )
 
 
 def generate_squash_commands(
-  db: dict, git_utils: GitUtils, no_push: bool = False
+  db: dict, git_utils: GitUtils, no_push: bool = False, message: str | None = None
 ) -> tuple[str | None, list[StrCommand] | None]:
   """Returns a list of commands to run to squash the current commit into the one before it and
-  maintain tree structure. The message of the commit before it is kept.
+  maintain tree structure. The message of the commit before it is kept, unless `message` is given.
 
   Returns:
     Tuple with two values:
@@ -910,7 +933,12 @@ def generate_squash_commands(
   # Branches that are behind the current one by a single commit branched off the commit that is
   # squashed into, so they are rewritten as well
   return generate_rewrite_commands(
-    db, git_utils, "squash", "git reset --soft HEAD~1 && git commit --amend --no-edit", 1, no_push
+    db,
+    git_utils,
+    "squash",
+    f"git reset --soft HEAD~1 && git commit --amend {commit_message_option(message)}",
+    1,
+    no_push,
   )
 
 
