@@ -56,11 +56,16 @@ class GitUtils:
     if self._owner_name and self._repo_name:
       return self._owner_name, self._repo_name
 
-    remotes = self._cmd.execute(["git", "-C", self._repo_path, "remote", "-v"])
+    try:
+      url = self._cmd.execute(["git", "-C", self._repo_path, "remote", "get-url", "origin"])
+    except git.exc.GitCommandError:
+      # origin doesn't exist
+      return self._owner_name, self._repo_name
+
     if "PYTEST_CURRENT_TEST" not in os.environ:
-      match = re.search(r"github\.com(?::|\/)([\w\-]+)\/([\w\-]+)\.git \(fetch\)", remotes)
+      match = re.search(r"github\.com(?::|\/)([\w\-]+)\/([\w\-]+?)(?:\.git)?\/?$", url)
     else:
-      match = re.search(r"([\w\-]+)\/([\w\-]+) \(fetch\)", remotes)
+      match = re.search(r"([\w\-]+)\/([\w\-]+)$", url)
 
     if match is not None:
       self._owner_name = match.group(1)
