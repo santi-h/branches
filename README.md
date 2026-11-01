@@ -15,7 +15,7 @@ Serves three purposes:
 ## Installation / Upgrading
 
 ```shell
-/usr/bin/env bash -c "$(curl -fsSL https://raw.githubusercontent.com/santi-h/branches/main/scripts/install.sh)"
+curl -fsSL https://branches.santi-h.com/install.sh | bash
 ```
 
 (see [installation script](/scripts/install.sh) for details)
